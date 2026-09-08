@@ -10,23 +10,30 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DEPLOYMENT_MODE=LOCAL_HOSPITAL
-      - DATABASE_URL=postgresql://medikiosk:medikiosk_local_secret@postgres:5432/medikiosk_db
-      - SPEECH_SERVICE_URL=http://whisper:8001
-      - OCR_SERVICE_URL=http://ocr:8002
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-LOCAL_HOSPITAL}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://medikiosk:medikiosk_local_secret@postgres:5432/medikiosk_db}
+      - SPEECH_SERVICE_URL=${SPEECH_SERVICE_URL:-http://whisper:8001}
+      - OCR_SERVICE_URL=${OCR_SERVICE_URL:-http://ocr:8002}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - CLOUD_API_URL=${CLOUD_API_URL:-https://api.medikiosk.in}
       - CLOUD_SYNC_SECRET=${CLOUD_SYNC_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:-medikiosk_local_hospital_jwt_secret}
+      - AWS_REGION=${AWS_REGION:-ap-south-1}
+      - S3_BUCKET=${S3_BUCKET:-medikiosk-clinical-records-2026}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
     volumes:
       - medikiosk_uploads:/app/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
       whisper:
         condition: service_started
+        required: false
       ocr:
         condition: service_started
+        required: false
     networks:
       - medikiosk-net
 
@@ -34,6 +41,9 @@ services:
     image: postgres:16-alpine
     container_name: medikiosk-postgres
     restart: unless-stopped
+    profiles:
+      - hospital
+      - local
     environment:
       - POSTGRES_DB=medikiosk_db
       - POSTGRES_USER=medikiosk
@@ -57,6 +67,9 @@ services:
       dockerfile: Dockerfile
     container_name: medikiosk-whisper
     restart: unless-stopped
+    profiles:
+      - hospital
+      - local
     environment:
       - SPEECH_HOST=0.0.0.0
       - SPEECH_PORT=8001
@@ -73,6 +86,9 @@ services:
       dockerfile: Dockerfile
     container_name: medikiosk-ocr
     restart: unless-stopped
+    profiles:
+      - hospital
+      - local
     environment:
       - OCR_HOST=0.0.0.0
       - OCR_PORT=8002

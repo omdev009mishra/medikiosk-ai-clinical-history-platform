@@ -104,8 +104,8 @@ CLOUD_API_URL=https://api.medikiosk.in
 CLOUD_SYNC_SECRET=hospital_delhi_aiia_token
 EOF
 
-# 3. Start all containers in background
-docker compose up -d
+# 3. Start all containers in background (uses 'hospital' profile for API + Postgres + Whisper + OCR)
+docker compose --profile hospital up -d
 
 # 4. Verify running services
 docker compose ps
@@ -120,19 +120,22 @@ docker compose ps
 ## 4. Central Cloud Deployment (AWS Mumbai: ap-south-1)
 
 ### AWS Resources:
-1. **Amazon ECS / EC2:** Runs `docker-compose.production.yml` with the MediKiosk API container.
-2. **Amazon RDS PostgreSQL:** Multi-AZ PostgreSQL 16 instance in private VPC subnets.
+1. **Amazon ECS / EC2:** Runs `docker-compose.production.yml` with the MediKiosk API container (lightweight ~400MB image; Whisper and OCR remain local to the hospital).
+2. **Amazon RDS PostgreSQL:** Multi-AZ PostgreSQL 16 instance in private VPC subnets with SSL enabled.
 3. **Amazon S3:** Private bucket `medikiosk-clinical-records-2026` with Server-Side Encryption (SSE-S3).
 4. **AWS Application Load Balancer (ALB):** Terminating HTTPS and WSS (WebSocket).
 5. **Cloudflare:** CDN, DDoS protection, Web Application Firewall (WAF), and DNS.
 
-### AWS Cloud Launch Commands:
+### AWS Cloud Launch Commands (API Only):
 ```bash
-# 1. Configure AWS CLI for Mumbai
-export AWS_DEFAULT_REGION=ap-south-1
+# 1. Pull latest changes
+git pull origin main
 
-# 2. Pull and start cloud production container
-docker compose -f docker-compose.production.yml up -d
+# 2. Build and launch cloud production container (Starts API only; DOES NOT build Whisper/OCR)
+docker compose -f docker-compose.production.yml up -d --build
+
+# Alternatively, using standard compose (profiles automatically exclude Whisper/OCR in cloud):
+# docker compose up -d --build app
 
 # 3. Check health probe
 curl -f http://localhost:3000/api/ready
@@ -202,11 +205,13 @@ curl -X POST http://localhost:3000/api/sync/trigger
 
 | Operation | Command |
 |---|---|
-| Start Local Hospital Stack | `docker compose up -d` |
+| Start Local Hospital Stack | `docker compose --profile hospital up -d` |
+| Start AWS Cloud Stack (API Only) | `docker compose -f docker-compose.production.yml up -d --build` |
 | View Service Logs | `docker compose logs -f app` |
 | Check Container Health | `docker compose ps` |
 | Stop Stack | `docker compose down` |
-| Rebuild Application | `docker compose build app && docker compose up -d app` |
+| Rebuild Application (Cloud) | `docker compose up -d --build app` |
+| Rebuild Application (Hospital) | `docker compose --profile hospital build && docker compose --profile hospital up -d` |
 | Run Deduplication Suite | `node scratch/test_patient_deduplication.js` |
 | Run Hybrid Sync Suite | `node scratch/test_hybrid_sync.js` |
 | Run Casualty Pipeline Suite | `node scratch/test_emergency_pipeline.js` |
