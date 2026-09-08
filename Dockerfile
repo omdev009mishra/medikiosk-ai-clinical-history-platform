@@ -11,7 +11,6 @@ RUN npm ci
 
 # Copy source code and configs
 COPY tsconfig.json vite.config.ts index.html ./
-COPY public/ ./public/
 COPY src/ ./src/
 COPY server/ ./server/
 COPY server.ts ./
