@@ -21,3 +21,7 @@ __pycache__/
 scratch/
 *.zip
 
+# Local persistent data directory
+data/
+
+

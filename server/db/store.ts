@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import {
   Patient,
   ClinicalEncounter,
@@ -12,6 +14,40 @@ import {
 import { evaluateRedFlags } from '../rules/redFlags';
 import { patientIdentityService } from '../services/patientIdentityService';
 
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function safeWriteJson(filePath: string, data: any) {
+  ensureDataDir();
+  const tmpPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, filePath);
+  } catch (e) {
+    if (fs.existsSync(tmpPath)) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    }
+    console.error(`[ClinicalStore] Error writing ${filePath}:`, e);
+  }
+}
+
+function safeReadJson<T>(filePath: string): T | null {
+  try {
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(content) as T;
+    }
+  } catch (e) {
+    console.warn(`[ClinicalStore] Error reading ${filePath}:`, e);
+  }
+  return null;
+}
+
 class ClinicalStore {
   private patients: Map<string, Patient> = new Map();
   private encounters: Map<string, ClinicalEncounter> = new Map();
@@ -21,8 +57,93 @@ class ClinicalStore {
   private hospitalIdIndex: Map<string, string> = new Map();
   private idempotencyStore: Map<string, { result: any; createdAt: number }> = new Map();
 
+  private dataDir = DATA_DIR;
+  private patientsFile = path.join(DATA_DIR, 'patients.json');
+  private encountersFile = path.join(DATA_DIR, 'encounters.json');
+  private doctorsFile = path.join(DATA_DIR, 'doctors.json');
+  private auditLogsFile = path.join(DATA_DIR, 'audit_logs.json');
+  private idempotencyFile = path.join(DATA_DIR, 'idempotency.json');
+
   constructor() {
-    this.seedInitialData();
+    this.initStore();
+  }
+
+  private initStore() {
+    const loaded = this.loadFromDisk();
+    if (!loaded) {
+      this.seedInitialData();
+      this.persistToDisk();
+    }
+  }
+
+  private loadFromDisk(): boolean {
+    const patientsList = safeReadJson<Patient[]>(this.patientsFile);
+    const encountersList = safeReadJson<ClinicalEncounter[]>(this.encountersFile);
+    const doctorsList = safeReadJson<DoctorUser[]>(this.doctorsFile);
+    const auditLogsList = safeReadJson<AuditLog[]>(this.auditLogsFile);
+    const idempotencyEntries = safeReadJson<Array<[string, { result: any; createdAt: number }]>>(this.idempotencyFile);
+
+    if (patientsList && patientsList.length > 0) {
+      for (const p of patientsList) {
+        this.patients.set(p.id, p);
+        if (p.abhaId) this.abhaIndex.set(p.abhaId.toLowerCase(), p.id);
+        if (p.hospitalPatientId) this.hospitalIdIndex.set(p.hospitalPatientId.toLowerCase(), p.id);
+        this.hospitalIdIndex.set(p.id.toLowerCase(), p.id);
+      }
+
+      if (encountersList) {
+        for (const e of encountersList) {
+          this.encounters.set(e.id, e);
+        }
+      }
+
+      if (doctorsList) {
+        for (const d of doctorsList) {
+          this.doctors.set(d.id, d);
+        }
+      }
+
+      if (auditLogsList) {
+        this.auditLogs = auditLogsList;
+      }
+
+      if (idempotencyEntries) {
+        for (const [k, v] of idempotencyEntries) {
+          this.idempotencyStore.set(k, v);
+        }
+      }
+
+      console.log(`[ClinicalStore] Restored ${this.patients.size} patients, ${this.encounters.size} encounters from persistent storage (${this.dataDir}).`);
+      return true;
+    }
+    return false;
+  }
+
+  public persistToDisk() {
+    try {
+      safeWriteJson(this.patientsFile, Array.from(this.patients.values()));
+      safeWriteJson(this.encountersFile, Array.from(this.encounters.values()));
+      safeWriteJson(this.doctorsFile, Array.from(this.doctors.values()));
+      safeWriteJson(this.auditLogsFile, this.auditLogs.slice(0, 500));
+      safeWriteJson(this.idempotencyFile, Array.from(this.idempotencyStore.entries()).slice(-500));
+    } catch (err) {
+      console.error('[ClinicalStore] Failed to persist data to disk:', err);
+    }
+  }
+
+  getIdempotentResult(key: string): any | undefined {
+    const cached = this.idempotencyStore.get(key);
+    if (!cached) return undefined;
+    if (Date.now() - cached.createdAt > 24 * 60 * 60 * 1000) {
+      this.idempotencyStore.delete(key);
+      return undefined;
+    }
+    return cached.result;
+  }
+
+  setIdempotentResult(key: string, result: any): void {
+    this.idempotencyStore.set(key, { result, createdAt: Date.now() });
+    this.persistToDisk();
   }
 
   private seedInitialData() {
@@ -610,6 +731,7 @@ class ClinicalStore {
         changedFields: comparison.changedFields,
         confidence: match.confidence,
       });
+      this.persistToDisk();
       return comparison.mergedData;
     }
 
@@ -640,6 +762,7 @@ class ClinicalStore {
       `[PATIENT_IDENTITY_RESOLUTION] Incoming: ${data.fullName} | Decision: CREATE_NEW_PATIENT | ID: ${id} | HospitalID: ${hospitalPatientId}`
     );
     this.logAudit(id, 'PATIENT', 'PATIENT_REGISTERED', 'Patient', id, { hospitalPatientId });
+    this.persistToDisk();
     return patient;
   }
 
@@ -661,6 +784,7 @@ class ClinicalStore {
       changedFields: comparison.changedFields,
       newFields: comparison.newFields,
     });
+    this.persistToDisk();
     return updated;
   }
 
@@ -702,6 +826,7 @@ class ClinicalStore {
         newFields: comparison.newFields,
         changedFields: comparison.changedFields,
       });
+      this.persistToDisk();
       return comparison.mergedData;
     }
 
@@ -717,6 +842,7 @@ class ClinicalStore {
     }
     this.hospitalIdIndex.set(id.toLowerCase(), id);
     this.logAudit(id, 'PATIENT', 'PATIENT_REGISTERED', 'Patient', id);
+    this.persistToDisk();
     return patient;
   }
 
@@ -805,6 +931,7 @@ class ClinicalStore {
       this.idempotencyStore.set(data.idempotencyKey, { result: encounter, createdAt: Date.now() });
     }
     this.logAudit(data.patientId, 'PATIENT', 'ENCOUNTER_CREATED', 'ClinicalEncounter', encounterId);
+    this.persistToDisk();
     return encounter;
   }
 
@@ -825,6 +952,7 @@ class ClinicalStore {
       updatedAt: new Date().toISOString(),
     };
     this.encounters.set(id, updated);
+    this.persistToDisk();
     return updated;
   }
 

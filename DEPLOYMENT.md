@@ -42,10 +42,13 @@ MediKiosk operates on a **Local-First / Hybrid Architecture**:
 ```
 
 ### Key Safety & Operational Guarantees:
-1. **Local-First Independence:** If internet connectivity drops, patient intake, voice interviews, Faster-Whisper STT, PaddleOCR, local triage, and Doctor Workstation remain 100% operational on the hospital LAN (`http://medikiosk.local:3000`).
-2. **Automatic Sync Recovery:** When internet reconnects, queued changes drain with exponential backoff and idempotency tokens.
-3. **One Patient Master Record:** Bayesian demographic deduplication guarantees a real patient (e.g. Ramesh Kumar) never gets duplicated across kiosk retries, offline reconnects, or repeated visits.
-4. **Internal Microservices Isolation:** Faster-Whisper (port 8001), PaddleOCR (port 8002), and PostgreSQL (port 5432) are bound to the internal Docker network and never exposed to the public internet.
+1. **Local-First Independence:** If internet connectivity drops, patient intake, voice interviews, Faster-Whisper STT, PaddleOCR, local triage, and Doctor Workstations remain 100% operational on the hospital LAN (`http://medikiosk.local:3000`).
+2. **Dual-Layer Persistence:** All patient records, active encounters, audit trails, and sync queue tasks are persisted concurrently to PostgreSQL and durable JSON journals (`./data/`). All data survives container restarts, API crashes, and host reboots.
+3. **Automatic Sync Recovery:** When internet reconnects, queued changes drain with exponential backoff and idempotency tokens.
+4. **One Patient Master Record:** Bayesian demographic deduplication guarantees a real patient (e.g. Ramesh Kumar) never gets duplicated across kiosk retries, offline reconnects, or repeated visits.
+5. **Internal Microservices Isolation:** Faster-Whisper (port 8001), PaddleOCR (port 8002), and PostgreSQL (port 5432) are bound to the internal Docker network and never exposed to the public internet.
+6. **Casualty Triage Priority:** Urgent/red-flag symptoms are routed directly to the hospital's **Casualty** department (`CASUALTY` badge, immediate doctor audio alert, zero diagnostic claims to the patient).
+7. **Voice Failover Architecture:** Gemini Live is utilized for full-duplex conversational voice when cloud internet is active; if hospital connectivity drops, the system automatically falls back to local Faster-Whisper STT on port 8001 with zero disruption.
 
 ---
 
@@ -204,8 +207,10 @@ curl -X POST http://localhost:3000/api/sync/trigger
 | Check Container Health | `docker compose ps` |
 | Stop Stack | `docker compose down` |
 | Rebuild Application | `docker compose build app && docker compose up -d app` |
-| Run Automated Tests | `node scratch/test_patient_deduplication.js` |
-| Run Emergency Suite | `node scratch/test_emergency_pipeline.js` |
+| Run Deduplication Suite | `node scratch/test_patient_deduplication.js` |
+| Run Hybrid Sync Suite | `node scratch/test_hybrid_sync.js` |
+| Run Casualty Pipeline Suite | `node scratch/test_emergency_pipeline.js` |
+| Run Restart Persistence Audit | `node scratch/test_restart_persistence.cjs --setup && node scratch/test_restart_persistence.cjs --verify` |
 | TypeScript Validation | `npx tsc --noEmit` |
 | Production Build | `npm run build` |
 

@@ -22,6 +22,7 @@ export interface ConsentRecord {
 
 export interface Patient {
   id: string;
+  hospitalPatientId?: string;
   abhaId?: string;
   abhaAddress?: string;
   name: string;

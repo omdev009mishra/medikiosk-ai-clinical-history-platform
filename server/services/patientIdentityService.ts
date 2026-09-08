@@ -272,6 +272,8 @@ export class PatientIdentityService {
   resolveIdentity(
     incoming: {
       id?: string;
+      hospitalPatientId?: string;
+      hospitalId?: string;
       fullName?: string;
       name?: string;
       phoneNumber?: string;
@@ -289,9 +291,10 @@ export class PatientIdentityService {
     const phone = incoming.phoneNumber || incoming.phone || '';
     const abhaId = incoming.abhaId?.trim();
     const incomingId = incoming.id?.trim();
+    const hospitalId = (incoming.hospitalPatientId || incoming.hospitalId)?.trim();
 
     // -----------------------------------------------------------------
-    // Level 1: Deterministic Identifier Matching
+    // Priority 1: Deterministic Internal Patient ID Matching
     // -----------------------------------------------------------------
     if (incomingId) {
       const match = candidates.find((p) => p.id.toLowerCase() === incomingId.toLowerCase());
@@ -306,6 +309,30 @@ export class PatientIdentityService {
       }
     }
 
+    // -----------------------------------------------------------------
+    // Priority 2: Deterministic Hospital Patient ID Matching
+    // -----------------------------------------------------------------
+    if (hospitalId) {
+      const normHosp = hospitalId.toLowerCase();
+      const match = candidates.find(
+        (p) =>
+          (p.hospitalPatientId && p.hospitalPatientId.toLowerCase() === normHosp) ||
+          p.id.toLowerCase() === normHosp
+      );
+      if (match) {
+        return {
+          matchLevel: 'CONFIRMED',
+          confidence: 1.0,
+          matchedPatient: match,
+          matchType: 'DETERMINISTIC_ID',
+          details: `Exact match on Hospital Patient ID: ${hospitalId}`,
+        };
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // Priority 3: Deterministic ABHA ID / Address Matching
+    // -----------------------------------------------------------------
     if (abhaId) {
       const normAbha = abhaId.toLowerCase();
       const match = candidates.find(
@@ -325,7 +352,7 @@ export class PatientIdentityService {
     }
 
     // -----------------------------------------------------------------
-    // Level 2: Strong Demographic Matching
+    // Priority 4: Strong Demographic Matching
     // (Full Name normalized + Mobile exact + Gender + Age/DOB exact)
     // -----------------------------------------------------------------
     const normPhone = normalizePhone(phone);
@@ -400,6 +427,23 @@ export class PatientIdentityService {
         matchedPatient: null,
         matchType: 'NONE',
         details: 'No matching patient record found.',
+      };
+    }
+
+    // MANDATORY SAFETY CONSTRAINTS:
+    // 1. If phone is explicitly DIFFERENT, or age/gender CONFLICTS -> NEVER auto-merge as CONFIRMED or HIGH_CONFIDENCE!
+    if (
+      bestEvidence?.phoneMatch === 'DIFFERENT' ||
+      bestEvidence?.ageMatch === 'CONFLICT' ||
+      bestEvidence?.genderMatch === 'CONFLICT'
+    ) {
+      return {
+        matchLevel: 'REVIEW_REQUIRED',
+        confidence: highestProbability,
+        matchedPatient: bestCandidate,
+        matchType: 'BAYESIAN_SIMILARITY',
+        evidence: bestEvidence || undefined,
+        details: `Conflict detected in Phone, Age, or Gender for similar patient record - Clinician Review Required (Cannot auto-merge)`,
       };
     }
 

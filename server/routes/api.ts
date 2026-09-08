@@ -87,6 +87,48 @@ apiRouter.post('/sync/resolve', (req: Request, res: Response) => {
   res.json({ success: resolved });
 });
 
+apiRouter.post('/sync/ingest', async (req: Request, res: Response) => {
+  const idempotencyKey = (req.headers['idempotency-key'] as string) || req.body?.idempotencyKey;
+  if (idempotencyKey) {
+    const cached = clinicalStore.getIdempotentResult(idempotencyKey);
+    if (cached) {
+      return res.json({ success: true, data: cached, idempotentReuse: true });
+    }
+  }
+
+  const { operation, entityType, entityId, payload } = req.body;
+  if (!operation || !entityType || !payload) {
+    return res.status(400).json({ success: false, error: { message: 'Missing required sync fields: operation, entityType, payload.' } });
+  }
+
+  let result: any;
+  if (entityType === 'Patient') {
+    result = clinicalStore.createPatient(payload);
+  } else if (entityType === 'Encounter') {
+    const existing = clinicalStore.getEncounter(entityId);
+    if (existing) {
+      result = clinicalStore.updateEncounter(entityId, payload);
+    } else {
+      result = clinicalStore.createEncounter(payload);
+    }
+  } else if (entityType === 'Summary') {
+    const enc = clinicalStore.getEncounter(entityId);
+    if (enc) {
+      enc.summary = payload;
+      clinicalStore.updateEncounter(entityId, { summary: payload });
+      result = payload;
+    }
+  } else {
+    result = { ingested: true, entityType, entityId };
+  }
+
+  if (idempotencyKey) {
+    clinicalStore.setIdempotentResult(idempotencyKey, result);
+  }
+
+  res.json({ success: true, data: result });
+});
+
 apiRouter.get('/health/ai', async (req: Request, res: Response) => {
   const aiHealth = await checkOllamaHealth();
   res.json({
@@ -449,6 +491,14 @@ apiRouter.get('/patients', async (req: Request, res: Response) => {
 
 apiRouter.post('/patients', async (req: Request, res: Response) => {
   try {
+    const idempotencyKey = (req.headers['idempotency-key'] as string) || req.body?.idempotencyKey;
+    if (idempotencyKey) {
+      const cached = clinicalStore.getIdempotentResult(idempotencyKey);
+      if (cached) {
+        return res.json({ success: true, data: cached, idempotentReuse: true });
+      }
+    }
+
     const data = req.body;
     const fullName = data.fullName || data.name;
     const phoneNumber = data.phoneNumber || data.phone;
@@ -464,8 +514,15 @@ apiRouter.post('/patients', async (req: Request, res: Response) => {
       address: data.address,
     });
 
+    if (idempotencyKey) {
+      clinicalStore.setIdempotentResult(idempotencyKey, patient);
+    }
+
     // Enqueue for cloud sync in hybrid deployment
     hybridSyncService.enqueue('UPSERT_PATIENT', 'Patient', patient.id, patient);
+
+    // Save asynchronously to PostgreSQL if configured
+    dbClient.savePatient(patient);
 
     res.json({ success: true, data: patient });
   } catch (err: any) {
@@ -494,6 +551,8 @@ apiRouter.post('/encounters', (req: Request, res: Response) => {
   const encounter = clinicalStore.createEncounter({ patientId, mode, language, idempotencyKey });
   // Enqueue for cloud sync
   hybridSyncService.enqueue('UPSERT_ENCOUNTER', 'Encounter', encounter.id, encounter);
+  // Persist asynchronously to PostgreSQL if configured
+  dbClient.saveEncounter(encounter);
 
   res.json({ success: true, data: encounter });
 });
@@ -526,6 +585,7 @@ apiRouter.patch('/encounters/:id', (req: Request, res: Response) => {
   const updated = clinicalStore.updateEncounter(encounter.id, req.body);
   if (updated) {
     hybridSyncService.enqueue('UPSERT_ENCOUNTER', 'Encounter', updated.id, updated);
+    dbClient.saveEncounter(updated);
   }
 
   res.json({ success: true, data: updated });

@@ -1,5 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import { clinicalStore } from '../db/store';
 import { patientIdentityService } from './patientIdentityService';
+
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const SYNC_QUEUE_FILE = path.join(DATA_DIR, 'sync_queue.json');
 
 export type SyncOperationType =
   | 'UPSERT_PATIENT'
@@ -62,6 +67,9 @@ export class HybridSyncService {
   }
 
   private init() {
+    // Restore persistent queue from disk
+    this.loadQueueFromDisk();
+
     // Start periodic connectivity check (every 10 seconds)
     this.checkConnectivity();
     this.checkIntervalTimer = setInterval(() => this.checkConnectivity(), 10000);
@@ -69,6 +77,42 @@ export class HybridSyncService {
     // Start sync processor (every 15 seconds if in local hospital mode)
     if (this.deploymentMode === 'LOCAL_HOSPITAL') {
       this.workerTimer = setInterval(() => this.processSyncQueue(), 15000);
+    }
+  }
+
+  private loadQueueFromDisk() {
+    try {
+      if (fs.existsSync(SYNC_QUEUE_FILE)) {
+        const raw = fs.readFileSync(SYNC_QUEUE_FILE, 'utf-8');
+        const items = JSON.parse(raw) as SyncQueueItem[];
+        if (Array.isArray(items)) {
+          for (const item of items) {
+            // Reset in-flight syncing items to PENDING so they are retried
+            if (item.status === 'SYNCING') {
+              item.status = 'PENDING';
+            }
+            this.queue.set(item.id, item);
+          }
+          console.log(
+            `[HybridSyncService] Restored ${this.queue.size} sync items from persistent queue (${this.getPendingCount()} pending).`
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[HybridSyncService] Could not read sync queue from disk:', e);
+    }
+  }
+
+  public persistQueueToDisk() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const tmpFile = `${SYNC_QUEUE_FILE}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+      fs.writeFileSync(tmpFile, JSON.stringify(Array.from(this.queue.values()), null, 2), 'utf-8');
+      fs.renameSync(tmpFile, SYNC_QUEUE_FILE);
+    } catch (e) {
+      console.error('[HybridSyncService] Error saving sync queue to disk:', e);
     }
   }
 
@@ -139,6 +183,7 @@ export class HybridSyncService {
     };
 
     this.queue.set(id, item);
+    this.persistQueueToDisk();
     console.log(
       `[HYBRID_SYNC] Queued local change: ${operation} (${entityType}:${entityId}) | Total pending: ${this.getPendingCount()}`
     );
@@ -221,6 +266,9 @@ export class HybridSyncService {
     }
 
     this.isSyncing = false;
+    if (processed > 0) {
+      this.persistQueueToDisk();
+    }
     return { processed, succeeded, failed };
   }
 
@@ -347,6 +395,7 @@ export class HybridSyncService {
       syncId,
     });
 
+    this.persistQueueToDisk();
     return true;
   }
 
