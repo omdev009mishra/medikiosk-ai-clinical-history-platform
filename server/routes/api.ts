@@ -958,6 +958,20 @@ apiRouter.get('/doctor/encounters', (req: Request, res: Response) => {
   const encounters = clinicalStore.getAllEncounters();
   const queue = encounters.map((enc) => {
     const pat = clinicalStore.getPatient(enc.patientId);
+
+    // Compute triageCategory
+    let triageCategory: 'CASUALTY' | 'PRIORITY' | 'ROUTINE' = (enc.triageCategory === 'EMERGENCY' ? 'CASUALTY' : enc.triageCategory as any) || 'ROUTINE';
+    const hasEmergencyAlert = (enc.alerts || []).some((a) => a.severity === 'EMERGENCY');
+    const hasHighAlert = (enc.alerts || []).some((a) => a.severity === 'HIGH' || a.severity === 'MEDIUM');
+
+    if (enc.isEmergency || enc.status === 'EMERGENCY' || hasEmergencyAlert || enc.triageCategory === 'CASUALTY') {
+      triageCategory = 'CASUALTY';
+    } else if (hasHighAlert || enc.triageCategory === 'PRIORITY') {
+      triageCategory = 'PRIORITY';
+    } else {
+      triageCategory = 'ROUTINE';
+    }
+
     return {
       id: enc.id,
       patientId: enc.patientId,
@@ -969,6 +983,15 @@ apiRouter.get('/doctor/encounters', (req: Request, res: Response) => {
       tokenNumber: enc.tokenNumber,
       mode: enc.mode,
       status: enc.status,
+      triageCategory,
+      isEmergency: triageCategory === 'CASUALTY',
+      emergencyDetails: enc.emergencyDetails || (triageCategory === 'CASUALTY' ? {
+        detectedAt: enc.updatedAt,
+        matchedCategory: (enc.alerts || [])[0]?.category || 'CASUALTY',
+        matchedSymptoms: (enc.alerts || [])[0]?.matchedSymptoms || [enc.history.chiefComplaint?.value || 'Casualty Referral'],
+        staffNotified: false,
+        locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+      } : undefined),
       chiefComplaint: enc.history.chiefComplaint?.value || 'Intake in progress',
       alerts: enc.alerts || [],
       hasRedFlags: (enc.alerts || []).length > 0,
@@ -979,8 +1002,104 @@ apiRouter.get('/doctor/encounters', (req: Request, res: Response) => {
     };
   });
 
+  // Sort queue: CASUALTY at the top, then PRIORITY, then ROUTINE
+  const rankMap: Record<string, number> = { CASUALTY: 0, EMERGENCY: 0, PRIORITY: 1, ROUTINE: 2 };
+  queue.sort((a, b) => {
+    const diff = (rankMap[a.triageCategory] ?? 2) - (rankMap[b.triageCategory] ?? 2);
+    if (diff !== 0) return diff;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
   res.json({ success: true, data: queue });
 });
+
+// Casualty / Emergency Escalation & Staff Notification Endpoints
+const handleEscalateCasualty = (req: Request, res: Response) => {
+  const encounter = clinicalStore.getEncounter(req.params.id);
+  if (!encounter) {
+    return res.status(404).json({ success: false, error: { message: 'Encounter not found.' } });
+  }
+
+  const { reason = 'Casualty referral symptoms reported by patient', category = 'CASUALTY' } = req.body;
+
+  encounter.status = 'EMERGENCY';
+  encounter.triageCategory = 'CASUALTY';
+  encounter.isEmergency = true;
+  encounter.emergencyDetails = {
+    detectedAt: new Date().toISOString(),
+    matchedCategory: category,
+    matchedSymptoms: [reason],
+    staffNotified: false,
+    locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+  };
+
+  const emergencyAlert = {
+    id: `ALERT_MANUAL_${Date.now()}`,
+    severity: 'EMERGENCY' as const,
+    category: 'OTHER' as const,
+    title: 'Casualty Medical Escalation',
+    description: reason,
+    matchedSymptoms: [reason],
+    recommendedAction: 'Immediate triage to Casualty / Attending Physician evaluation.',
+    triggeredAt: new Date().toISOString(),
+  };
+
+  encounter.alerts.push(emergencyAlert);
+
+  clinicalStore.updateEncounter(encounter.id, {
+    status: encounter.status,
+    triageCategory: encounter.triageCategory,
+    isEmergency: true,
+    emergencyDetails: encounter.emergencyDetails,
+    alerts: encounter.alerts,
+  });
+
+  clinicalStore.logAudit(encounter.patientId, 'PATIENT', 'CASUALTY_ESCALATED', 'ClinicalEncounter', encounter.id, {
+    reason,
+    category,
+  });
+
+  res.json({ success: true, data: encounter });
+};
+
+apiRouter.post('/encounters/:id/emergency/escalate', handleEscalateCasualty);
+apiRouter.post('/encounters/:id/casualty/escalate', handleEscalateCasualty);
+
+const handleNotifyCasualtyStaff = (req: Request, res: Response) => {
+  const encounter = clinicalStore.getEncounter(req.params.id);
+  if (!encounter) {
+    return res.status(404).json({ success: false, error: { message: 'Encounter not found.' } });
+  }
+
+  encounter.emergencyDetails = {
+    ...(encounter.emergencyDetails || {
+      detectedAt: new Date().toISOString(),
+      matchedCategory: 'CASUALTY',
+      matchedSymptoms: ['Staff notification requested'],
+      locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+    }),
+    staffNotified: true,
+    staffNotifiedAt: new Date().toISOString(),
+  };
+
+  clinicalStore.updateEncounter(encounter.id, {
+    emergencyDetails: encounter.emergencyDetails,
+  });
+
+  clinicalStore.logAudit('KIOSK_SYSTEM', 'SYSTEM', 'CASUALTY_STAFF_NOTIFIED', 'ClinicalEncounter', encounter.id, {
+    notifiedAt: encounter.emergencyDetails.staffNotifiedAt,
+    tokenNumber: encounter.tokenNumber,
+  });
+
+  res.json({
+    success: true,
+    message: 'Hospital staff and casualty triage team alerted.',
+    data: encounter.emergencyDetails,
+  });
+};
+
+apiRouter.post('/encounters/:id/emergency/notify-staff', handleNotifyCasualtyStaff);
+apiRouter.post('/encounters/:id/casualty/notify-staff', handleNotifyCasualtyStaff);
 
 apiRouter.get('/doctor/encounters/:id', (req: Request, res: Response) => {
   const encounter = clinicalStore.getEncounter(req.params.id);

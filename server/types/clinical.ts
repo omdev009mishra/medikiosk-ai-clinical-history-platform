@@ -167,7 +167,7 @@ export interface TimelineEvent {
 export interface RedFlagAlert {
   id: string;
   severity: TriagePriority;
-  category: 'CARDIAC' | 'NEUROLOGICAL' | 'RESPIRATORY' | 'ABDOMINAL' | 'SEPSIS' | 'OTHER';
+  category: 'CARDIAC' | 'NEUROLOGICAL' | 'RESPIRATORY' | 'ABDOMINAL' | 'SEPSIS' | 'TRAUMA' | 'ANAPHYLAXIS' | 'OTHER';
   title: string;
   description: string;
   matchedSymptoms: string[];
@@ -407,7 +407,7 @@ export interface ClinicalAuditEvent {
 export interface ClinicalEncounter {
   id: string;
   patientId: string;
-  status: 'INTAKE_IN_PROGRESS' | 'AWAITING_DOCTOR_REVIEW' | 'VERIFIED' | 'REJECTED';
+  status: 'INTAKE_IN_PROGRESS' | 'AWAITING_DOCTOR_REVIEW' | 'VERIFIED' | 'REJECTED' | 'EMERGENCY';
   mode: IntakeMode;
   language: LanguageCode;
   consent: ConsentRecord;
@@ -424,7 +424,19 @@ export interface ClinicalEncounter {
   assignedDoctorId?: string;
   hisSyncStatus?: 'PENDING' | 'SYNCED' | 'FAILED';
   abdmBundleId?: string;
+  triageCategory?: 'CASUALTY' | 'PRIORITY' | 'ROUTINE' | 'EMERGENCY';
+  isEmergency?: boolean;
+  emergencyDetails?: {
+    detectedAt: string;
+    matchedCategory: string;
+    matchedSymptoms: string[];
+    staffNotified?: boolean;
+    staffNotifiedAt?: string;
+    locationNotice?: string;
+  };
 }
+
+export type TriageCategory = 'CASUALTY' | 'PRIORITY' | 'ROUTINE' | 'EMERGENCY';
 
 export interface AuditLog {
   id: string;

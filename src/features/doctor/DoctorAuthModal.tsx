@@ -27,7 +27,7 @@ export const PRESET_DOCTORS: DoctorUser[] = [
     name: 'Dr. Alok Verma',
     regNo: 'MCI-2014-98124',
     hprId: '91-8839-2041-9981',
-    department: 'General Medicine & Emergency Triage',
+    department: 'General Medicine & Casualty Triage',
     chamber: 'Chamber 108',
     role: 'CHIEF_CONSULTANT',
     avatarInitials: 'AV',

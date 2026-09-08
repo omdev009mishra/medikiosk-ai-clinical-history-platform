@@ -6,6 +6,7 @@ import { clinicalStore } from '../db/store';
 import { adaptiveInterviewService } from './adaptiveInterviewService';
 import { detectInterviewCompletion } from './interviewCompletionService';
 import { transcribeAudio, synthesizeSpeech } from './speechService';
+import { interviewSafetyService } from './interviewSafetyService';
 
 interface LiveVoiceClientMessage {
   type: 'AUDIO_CHUNK' | 'TEXT_INPUT' | 'INTERRUPT' | 'COMPLETE_INTERVIEW' | 'PING';
@@ -93,18 +94,16 @@ export class LiveVoiceSession {
     const patientName = patient?.name || 'Patient';
     const knownComplaint = encounter?.history?.chiefComplaint?.value || '';
 
-    const systemInstructionText = `You are MediKiosk AI, an empathetic, highly skilled clinical intake assistant in an Indian hospital outpatient department.
+    const systemInstructionText = `You are MediKiosk AI, a warm, reassuring, and highly empathetic hospital clinical intake assistant in an Indian hospital outpatient department.
 You are conversing in real-time with ${patientName}.${knownComplaint ? ` Known reported complaint: ${knownComplaint}.` : ''}
 
-CRITICAL CLINICAL RULES:
-1. Conduct an empathetic, structured clinical history intake:
-   - Identify primary symptoms (location, severity 1-10, duration, quality).
-   - Inquire about aggravating/relieving factors and associated symptoms.
-   - Ask about prior medical history, chronic conditions (diabetes, hypertension), current medications, and known drug allergies.
-2. Language: Understand Indian English, Hindi, and Hinglish seamlessly. Match the patient's language of comfort.
-3. CONVERSATIONAL BREVITY: Speak ONLY 1 TO 2 SHORT SENTENCES per turn. Never give long speeches or monologues. Ask only one clear clinical question at a time so the patient can speak naturally.
-4. If patient exhibits emergency red flags (severe chest tightness, acute dyspnea, sudden neurological deficit, severe hemorrhage), warmly advise urgent emergency room triage.
-5. If the patient indicates they have finished sharing information (e.g., "that is all", "bas itna hi", "nothing else", "i am done"), provide a warm closing acknowledgment and inform them their clinical summary has been prepared for the doctor.`;
+HUMANIZED & EMPATHETIC CLINICAL PRINCIPLES:
+1. Warm, Caring Demeanor: Speak like a caring, attentive hospital intake nurse. Reassure the patient and make them feel heard and safe.
+2. Natural Transitions: Naturally acknowledge what the patient shared before asking your next question (e.g. "I understand.", "Thanks for explaining that.", "Let me note down a bit more about that for the doctor.").
+3. Simple Everyday Phrasing: Strictly avoid intimidating clinical jargon. Use simple phrases (e.g. "difficulty breathing or shortness of breath", "does the pain spread anywhere else, such as your arm or neck", "does bright light hurt your eyes").
+4. Conversational Brevity: Speak ONLY 1 TO 2 SHORT SENTENCES per turn. Never give long lectures or multi-part questions. Ask only one clear question at a time so the patient can speak naturally.
+5. Critical Safety: NEVER diagnose a disease (do NOT say "You are having a heart attack"). If patient reports red-flag symptoms (severe crushing chest pain, acute dyspnea/breathlessness, stroke-like numbness/weakness, uncontrolled bleeding, head injury with vomiting, seizure, anaphylaxis), calmly and urgently advise: "Based on what you've told me, you may need immediate medical attention. Please stay calm and proceed directly to the Emergency / Casualty desk."
+6. When the patient indicates they are done sharing information (e.g., "that is all", "bas itna hi", "nothing else", "i am done"), warmly acknowledge and let them know their chart has been prepared for the doctor.`;
 
     try {
       console.log(`[LiveVoiceSession] Initializing Gemini Live for encounter ${this.encounterId}...`);
@@ -153,8 +152,8 @@ CRITICAL CLINICAL RULES:
 
       // Send initial opening prompt to prompt Gemini to greet the patient
       const greetingPrompt = this.language === 'hi'
-        ? 'Namaste! Patient has entered the kiosk. Give a brief, warm 1-sentence Hindi greeting and ask how you can help them today.'
-        : 'Hello! Patient has entered the kiosk. Give a brief, warm 1-sentence greeting and ask what brings them in today.';
+        ? 'Namaste! Patient has entered the kiosk. Give a warm, reassuring 1-sentence Hindi greeting: "नमस्ते! मेडीकियोस्क में आपका स्वागत है। डॉक्टर से मिलने से पहले मैं आपकी थोड़ी मदद करने के लिए यहाँ हूँ। आज आपको क्या परेशानी या तकलीफ महसूस हो रही है?"'
+        : 'Hello! Patient has entered the kiosk. Give a warm, reassuring 1-sentence greeting: "Hello! Welcome to MediKiosk. I\'m here to help share your health concerns with the doctor. What brings you to the hospital today?"';
 
       this.session.sendClientContent({
         turns: [{ role: 'user', parts: [{ text: greetingPrompt }] }],
@@ -179,8 +178,8 @@ CRITICAL CLINICAL RULES:
   private async sendFallbackGreeting(): Promise<void> {
     try {
       const greetingText = this.language === 'hi'
-        ? 'नमस्ते! मेडीकियोस्क में आपका स्वागत है। आज आपको क्या परेशानी है?'
-        : 'Hello! Welcome to MediKiosk. What symptoms are you experiencing today?';
+        ? 'नमस्ते! मेडीकियोस्क में आपका स्वागत है। डॉक्टर से मिलने से पहले मैं आपकी थोड़ी मदद करने के लिए यहाँ हूँ। चिंता मत कीजिए—हम आराम से एक-एक कदम आगे बढ़ेंगे। आज आपको क्या परेशानी या तकलीफ महसूस हो रही है?'
+        : "Hello! Welcome to MediKiosk. I'm here to help share your health concerns with the doctor. Don't worry—we will go step by step. What brings you to the hospital today?";
 
       console.log(`[LiveVoiceSession] Sending initial greeting: "${greetingText}"`);
       await this.recordTurn('ASSISTANT', greetingText);
@@ -446,6 +445,18 @@ CRITICAL CLINICAL RULES:
         });
       }
 
+      // Check for emergency
+      if (turnRes.interviewStatus === 'EMERGENCY' || turnRes.isEmergency) {
+        console.warn(`[LiveVoiceSession] Emergency detected for encounter ${this.encounterId}! Emitting EMERGENCY_DETECTED`);
+        this.sendToClient({
+          type: 'EMERGENCY_DETECTED',
+          emergencyAlert: turnRes.emergencyAlert,
+          alert: turnRes.emergencyAlert,
+          message: nextQuestion,
+        });
+        return;
+      }
+
       // Check for completion
       if (turnRes.completionDetected || turnRes.interviewStatus === 'COMPLETED') {
         await this.finishInterview();
@@ -543,6 +554,44 @@ CRITICAL CLINICAL RULES:
             type: 'TURN_COMPLETE',
             fullText: fullTurn,
           });
+
+          // Check for emergency red flags in turn
+          const encounter = clinicalStore.getEncounter(this.encounterId);
+          const emergencyCheck = interviewSafetyService.checkEmergency(this.currentUserTurnText || '', encounter);
+          if (emergencyCheck.isEmergency && emergencyCheck.alert) {
+            console.warn(`[LiveVoiceSession] Gemini Live turn emergency detected: ${emergencyCheck.alert.title}`);
+            if (encounter) {
+              encounter.status = 'EMERGENCY';
+              encounter.triageCategory = 'CASUALTY';
+              encounter.isEmergency = true;
+              encounter.emergencyDetails = {
+                detectedAt: new Date().toISOString(),
+                matchedCategory: emergencyCheck.alert.category,
+                matchedSymptoms: emergencyCheck.alert.matchedSymptoms,
+                staffNotified: false,
+                locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+              };
+              if (!encounter.alerts.some((a) => a.id === emergencyCheck.alert!.id)) {
+                encounter.alerts.push(emergencyCheck.alert);
+              }
+              clinicalStore.updateEncounter(this.encounterId, {
+                status: encounter.status,
+                triageCategory: encounter.triageCategory,
+                isEmergency: true,
+                emergencyDetails: encounter.emergencyDetails,
+                alerts: encounter.alerts,
+              });
+            }
+            this.sendToClient({
+              type: 'EMERGENCY_DETECTED',
+              emergencyAlert: emergencyCheck.alert,
+              alert: emergencyCheck.alert,
+              message: this.language.startsWith('hi') ? emergencyCheck.messageHi : emergencyCheck.messageEn,
+            });
+            this.currentAiTurnText = '';
+            this.currentUserTurnText = '';
+            return;
+          }
 
           // Check if patient provided symptoms or completion
           const completionCheck = detectInterviewCompletion(

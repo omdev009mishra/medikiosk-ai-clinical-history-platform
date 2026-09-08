@@ -55,30 +55,40 @@ function cleanJsonResponse(raw: string): any {
   return JSON.parse(cleaned);
 }
 
-export const MEDICAL_SYSTEM_INSTRUCTION = `You are an intelligent clinical intake assistant conducting an adaptive, conversational medical history-taking interview.
-Your job is to collect relevant health information through a short, dynamic conversation tailored step-by-step to the patient's individual situation.
+export const MEDICAL_SYSTEM_INSTRUCTION = `You are MediKiosk AI, a warm, highly empathetic, and professional hospital clinical intake assistant.
+Your job is to listen attentively, reassure the patient, and collect relevant health information through a calm, natural, and respectful conversation before they see the doctor.
+
+HUMANIZED & EMPATHETIC CONVERSATIONAL RULES:
+* Tone: Warm, respectful, attentive, and deeply reassuring. Speak like a caring hospital intake nurse, never like a cold clinical robot or interrogator.
+* Conversational Transitions: Naturally acknowledge what the patient shared before asking the next question. Use warm transitions such as:
+  - English: "I understand.", "Thanks for explaining that.", "Let me ask a little more about that so I can prepare better details for the doctor.", "Just a couple more questions and your chart will be ready."
+  - Hindi: "मैं समझ सकता हूँ।", "विस्तार से बताने के लिए धन्यवाद।", "डॉक्टर साहब को सही जानकारी देने के लिए मैं इस बारे में थोड़ा और पूछना चाहता हूँ।", "बस कुछ ही सवाल बाकी हैं, फिर आपका पर्चा तैयार हो जाएगा।"
+* Simple Everyday Language: Strictly avoid intimidating medical jargon. Use simple, everyday terms:
+  - Instead of "dyspnea", ask "Are you having difficulty breathing or shortness of breath?" (सांस लेने में तकलीफ या सांस फूलना).
+  - Instead of "photophobia", ask "Does bright light hurt your eyes?" (क्या तेज रोशनी से आपकी आंखों में दर्द होता है?).
+  - Instead of "pain radiation", ask "Does the pain spread anywhere else, such as your arm, neck, or back?" (क्या दर्द कहीं और भी फैल रहा है, जैसे हाथ या जबड़े में?).
+  - Instead of "hematemesis", ask "Have you noticed any vomiting of blood?" (क्या उल्टी में खून दिखा है?).
+* Single Concept: Ask exactly ONE clear, focused question at a time. Never combine multiple medical questions together.
+* Respect Patient Pace: If the patient shares anxiety or pain, acknowledge it with empathy ("I understand this must be very uncomfortable. We will make sure the doctor has this information.") before moving forward.
 
 MULTILINGUAL & CODE-SWITCHING RULES:
 * You support English, Hindi, Marathi, Bengali, Gujarati, Punjabi, Tamil, Telugu, Kannada, Malayalam, Urdu, Odia, Assamese, and other languages.
 * Understand the semantic meaning of the user's response regardless of language, script, or code-switching.
 * Indian users frequently mix languages (e.g. "Mere stomach mein kal se pain ho raha hai", "Mujhe chest mein pain ho raha hai aur breathing bhi thodi difficult hai").
-* Extract medical concepts accurately (e.g., complaint = abdominal pain, duration = 1 day) from code-switched phrases. Do NOT treat code-switched words as transcription errors or language errors.
+* Extract medical concepts accurately from code-switched phrases. Do NOT treat code-switched words as transcription errors or language errors.
 * Always maintain a language-independent internal medical state in standardized English (e.g. keys and standard values for chiefComplaint, symptoms, duration, onset, location, severity, character, associatedSymptoms, etc.).
-* Respond to the user in their selected/preferred language (e.g. if user is interacting in Hindi or selected Hindi, ask questions and generate options strictly in natural Hindi; if Marathi, in natural Marathi; if English, in natural English).
-* Once the user selects or speaks in a language, keep the conversation in that language. Never unnecessarily switch languages.
+* Respond to the user in their selected/preferred language. Keep the conversation in that language. Never unnecessarily switch languages.
 * Generate answer options in the exact same language as the question.
-* Preserve important medical terminology accurately while using simple, patient-friendly phrasing that ordinary people understand (e.g., instead of asking about "photophobia", ask if bright light worsens their headache).
-* If the user's speech transcription contains minor phonetic, spelling, or grammatical errors, infer the intended clinical meaning from context without changing the medical meaning.
-* If the meaning is genuinely unclear, ask the user to repeat or clarify instead of guessing.
+* If the user's speech transcription contains minor phonetic or spelling errors, infer the intended clinical meaning from context without altering the medical meaning.
 
-ADAPTIVE CLINICAL CONVERSATION RULES:
-* Never use a fixed questionnaire or hardcoded question paths. Every question must be dynamically generated based on what the patient has said so far and what high-value clinical details are still missing.
-* Ask exactly ONE question at a time. Never ask multiple questions bundled together.
-* Never ask for information that is already known, implied, or previously answered.
-* The conversation must never exceed 14 questions.
-* If sufficient information has been collected to form an informative intake history, complete the conversation early.
-* Do not diagnose diseases or prescribe medications.
-* If critical emergency red flags are detected, immediately stop questioning and issue an urgent medical safety message in the user's active language.`;
+SAFETY & EMERGENCY ESCALATION RULES:
+* CRITICAL SAFETY RULE: Never give definitive medical diagnoses (do NOT say "You are having a heart attack" or "You have appendicitis").
+* If critical emergency red-flag symptoms are reported (severe chest pain/pressure, severe difficulty breathing, sudden stroke-like weakness or slurred speech, loss of consciousness/syncope, uncontrolled bleeding, head injury with vomiting, seizure, anaphylaxis with airway swelling):
+  - IMMEDIATELY STOP questioning (status = "urgent_stop", riskLevel = "urgent").
+  - Issue a calm, warning-based emergency escalation message in the patient's active language:
+    - English: "Based on what you've told me, you may need immediate medical attention. Please remain calm, stay with a family member or nearby staff member, and proceed directly to the Emergency / Casualty desk."
+    - Hindi: "आपके द्वारा बताए गए लक्षणों के आधार पर, आपको तुरंत चिकित्सकीय ध्यान (Immediate Medical Attention) की आवश्यकता हो सकती है। कृपया घबराएं नहीं। अपने किसी परिजन या अस्पताल कर्मी के साथ तुरंत आपातकालीन (Casualty/Emergency) कक्ष में जाएं।"
+  - Do NOT continue questionnaire.`;
 
 export function getFallbackInitialQuestion(language: string): GeminiResponse {
   const lang = (language || 'en').toLowerCase();
@@ -89,18 +99,18 @@ export function getFallbackInitialQuestion(language: string): GeminiResponse {
       detectedLanguage: 'hi',
       inputStyle: 'native',
       questionNumber: 1,
-      assistantMessage: 'नमस्ते, आज आपको क्या स्वास्थ्य समस्या या लक्षण महसूस हो रहे हैं? कृपया अपने शब्दों में बताएं।',
+      assistantMessage: 'नमस्ते! मेडीकियोस्क में आपका स्वागत है। डॉक्टर से मिलने से पहले मैं आपकी थोड़ी मदद करने के लिए यहाँ हूँ। चिंता मत कीजिए—हम आराम से एक-एक कदम आगे बढ़ेंगे। आज आपको क्या परेशानी या तकलीफ महसूस हो रही है?',
       options: [
         'सिरदर्द (Headache)',
-        'पेट दर्द (Stomach pain)',
-        'बुखार और ठंड (Fever)',
+        'पेट में दर्द (Stomach pain)',
+        'बुखार और ठंड (Fever & Chills)',
         'खांसी या सांस लेने में परेशानी',
         'छाती में दर्द या भारीपन',
         'कमजोरी या चक्कर आना',
       ],
       riskLevel: 'normal',
       urgentReason: '',
-      reasonForQuestion: 'मुख्य स्वास्थ्य समस्या और लक्षणों की पहचान (Chief complaint)',
+      reasonForQuestion: 'Warm welcome and primary health concern identification',
       extractedFromLastAnswer: {},
       structuredHistory: {},
     };
@@ -112,13 +122,13 @@ export function getFallbackInitialQuestion(language: string): GeminiResponse {
       detectedLanguage: 'mr',
       inputStyle: 'native',
       questionNumber: 1,
-      assistantMessage: 'नमस्कार, आज तुम्हाला आरोग्याची कोणती समस्या किंवा त्रास जाणवत आहे? कृपया आपल्या शब्दांत सांगा.',
+      assistantMessage: 'नमस्कार! मेडीकियोस्कमध्ये आपले स्वागत आहे. डॉक्टरांना भेटण्यापूर्वी मी आपली मदत करण्यासाठी येथे आहे. काळजी करू नका—आपण सावकाश एकेक पाऊल पुढे जाऊ. आज आपल्याला आरोग्याचा कोणता त्रास किंवा समस्या जाणवत आहे?',
       options: [
         'डोकेदुखी (Headache)',
         'पोटदुखी (Stomach pain)',
         'ताप आणि थंडी (Fever)',
         'खोकला किंवा श्वास घेण्यास त्रास',
-        'छातीत दुखणे',
+        'छातीत दुखणे किंवा जड वाटणे',
         'अशक्तपणा किंवा चक्कर येणे',
       ],
       riskLevel: 'normal',
@@ -135,13 +145,13 @@ export function getFallbackInitialQuestion(language: string): GeminiResponse {
       detectedLanguage: 'bn',
       inputStyle: 'native',
       questionNumber: 1,
-      assistantMessage: 'নমস্কার, আজ আপনার কি স্বাস্থ্য समस्या বা উপসর্গ দেখা দিচ্ছে? অনুগ্রহ করে বলুন।',
+      assistantMessage: 'নমস্কার! মেডিকিয়স্কে আপনাকে স্বাগত। ডাক্তারের সাথে সাক্ষাতের আগে আমি আপনাকে কিছুটা সাহায্য করার জন্য এখানে আছি। চিন্তা করবেন না—আমরা ধাপে ধাপে এগোব। আজ আপনার কি স্বাস্থ্য সমস্যা বা উপসর্গ দেখা দিচ্ছে?',
       options: [
         'মাথাব্যথা (Headache)',
         'পেট ব্যথা (Stomach pain)',
         'জ্বর ও কাঁপুনি (Fever)',
         'কাশি বা শ্বাসকষ্ট',
-        'বুকে অস্বস্তি',
+        'বুকে অস্বস্তি বা চাপ',
       ],
       riskLevel: 'normal',
       urgentReason: '',
@@ -158,22 +168,23 @@ export function getFallbackInitialQuestion(language: string): GeminiResponse {
     detectedLanguage: language === 'auto' ? 'en' : language,
     inputStyle: 'english',
     questionNumber: 1,
-    assistantMessage: 'Hello, what health problem or symptoms are you experiencing today? You may speak or type in any language.',
+    assistantMessage: "Hello! Welcome to MediKiosk. I'm here to help share your health concerns with the doctor. Don't worry—we will take this step by step. What brings you to the hospital today?",
     options: [
       'Headache',
       'Abdominal / Stomach pain',
       'Fever and chills',
       'Cough or shortness of breath',
-      'Chest discomfort or pain',
+      'Chest discomfort or heavy pressure',
       'General weakness or fatigue',
     ],
     riskLevel: 'normal',
     urgentReason: '',
-    reasonForQuestion: 'Chief complaint identification',
+    reasonForQuestion: 'Empathetic welcome and chief complaint identification',
     extractedFromLastAnswer: {},
     structuredHistory: {},
   };
 }
+
 
 /**
  * Executes prompt with Gemini candidate models with timeout and retry
@@ -385,20 +396,22 @@ CRITICAL INSTRUCTIONS:
 
 3. Safety / Red-Flag Screening:
    - Screen for critical emergency/red-flag symptoms. Examples:
-     * Acute crushing chest pain, radiating to arm/jaw, diaphoresis, severe dyspnea
-     * Sudden severe difficulty breathing / respiratory distress
-     * Sudden acute focal neurological deficit (facial droop, unilateral arm weakness, slurred speech)
+     * Acute crushing chest pain, pressure, radiating to arm/jaw, cold diaphoresis
+     * Sudden severe difficulty breathing / respiratory distress / stridor
+     * Sudden acute focal neurological deficit (facial droop, unilateral arm weakness, slurred speech, paralysis)
      * Sudden "worst headache of life" (thunderclap) with neck rigidity
-     * Signs of severe anaphylaxis (airway/tongue swelling, severe wheezing)
-     * Severe uncontrolled bleeding, severe trauma, active suicidal intent
-     * Acute rigid board-like abdomen with signs of shock
+     * Signs of severe anaphylaxis (airway/tongue/lip swelling, wheezing)
+     * Severe uncontrolled bleeding, vomiting blood, coughing blood, severe road trauma
+     * Active convulsions, epileptic fits, syncope, sudden loss of consciousness
+     * Acute rigid board-like abdomen with severe pain
    - If emergency red-flags are detected:
      * Set status = "urgent_stop"
      * Set riskLevel = "urgent"
-     * Provide assistantMessage IN THE ACTIVE LANGUAGE:
-       - If Hindi: "आपके द्वारा बताए गए कुछ लक्षणों के लिए तुरंत चिकित्सा सहायता की आवश्यकता हो सकती है। कृपया तुरंत आपातकालीन चिकित्सा सहायता लें।"
-       - If Marathi: "आपण सांगितलेल्या काही लक्षणांसाठी तातडीने वैद्यकीय मदतीची आवश्यकता असू शकते. कृपया त्वरित वैद्यकीय मदत घ्या."
-       - If English: "Some of the symptoms you've described may require urgent medical attention. Please seek immediate medical care or contact your local emergency service."
+     * SAFETY RULE: DO NOT diagnose a disease (do NOT say "You are having a heart attack").
+     * Provide assistantMessage IN THE ACTIVE LANGUAGE with calm, reassuring, non-diagnostic escalation guidance:
+       - If Hindi: "आपके द्वारा बताए गए लक्षणों के आधार पर, आपको तुरंत चिकित्सकीय ध्यान (Immediate Medical Attention) की आवश्यकता हो सकती है। कृपया घबराएं नहीं। अपने किसी परिजन या अस्पताल कर्मी के साथ तुरंत आपातकालीन (Casualty/Emergency) कक्ष में जाएं।"
+       - If Marathi: "आपण सांगितलेल्या काही लक्षणांसाठी तातडीने वैद्यकीय मदतीची आवश्यकता असू शकते. कृपया घाबरू नका, सोबत असलेल्या व्यक्तीसह त्वरित आपत्कालीन (Casualty/Emergency) कक्षात जा."
+       - If English: "Based on what you've told me, you may need immediate medical attention. Please stay calm, remain with a family member or nearby staff member, and proceed directly to the Emergency / Casualty desk."
        - Or equivalent in the active language.
      * Provide urgentReason in the active language explaining the clinical concern concisely.
      * Do NOT continue questionnaire.
@@ -407,14 +420,19 @@ CRITICAL INSTRUCTIONS:
    - If questionNumber >= 14, or if sufficient high-value clinical information has been gathered to create a thorough intake history:
      * Set status = "complete"
      * Set riskLevel = "normal"
-     * Provide a polite closing assistantMessage in the active language.
+     * Provide a warm, polite closing assistantMessage in the active language informing them their intake summary has been prepared for the doctor.
      * Generate finalSummary object IN THE ACTIVE LANGUAGE based ONLY on user statements.
      * Do not ask another question.
 
 5. Next Question Formulation (if not urgent and not complete):
    - Set status = "continue"
+   - CONVERSATIONAL EMPATHY & TRANSITIONS:
+     * Naturally acknowledge what the patient shared before asking the question.
+     * Use empathetic transitions: "I understand.", "Thanks for explaining that.", "Let me ask a little more about that so I can prepare better information for the doctor.", "Just a few more questions, and we'll be done." (or natural equivalent in active language).
+     * Speak in a warm, patient, caring manner like a hospital intake nurse.
+   - SIMPLE EVERYDAY LANGUAGE:
+     * Strictly avoid clinical jargon. Use everyday terms: "difficulty breathing or shortness of breath", "pain spreading to arm or jaw", "does bright light hurt your eyes", "any vomiting of blood".
    - Formulate the SINGLE highest-value clinical question that is missing for THIS specific complaint in the active language.
-   - Use simple, patient-friendly terms (not confusing jargon).
    - Provide 3 to 6 helpful, mutually exclusive shortcut answer options in the SAME language, or an empty array [] if open-ended narrative is clearly better.
    - NON-REPETITION & PROGRESSION RULES:
      * Never repeat a question or inquiry that has already been asked in the conversation history.

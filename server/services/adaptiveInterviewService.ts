@@ -12,6 +12,7 @@ import {
   GeminiResponse,
 } from './medicalInterrogation';
 import { clinicalStore } from '../db/store';
+import { interviewSafetyService } from './interviewSafetyService';
 import { runValidationPipeline } from './clinicalValidationPipeline';
 import { generateClinicalExtraction } from '../ai/gemini';
 import { generateEncounterSummary } from './summaryGenerator';
@@ -221,6 +222,89 @@ export const adaptiveInterviewService = {
       timestamp: new Date().toISOString(),
     });
 
+    // 1. Immediate Deterministic Red Flag Safety Evaluation
+    const activeEncounter = clinicalStore.getEncounter(encounterId);
+    const safetyCheck = interviewSafetyService.checkEmergency(patientAnswer, activeEncounter);
+
+    if (safetyCheck.isEmergency && safetyCheck.alert) {
+      console.warn(`[Medical Interrogation] DETERMINISTIC EMERGENCY RED FLAG DETECTED for encounter ${encounterId}:`, safetyCheck.alert.title);
+
+      const matchedAlert = safetyCheck.alert;
+      const isHi = language.startsWith('hi');
+      const escalationMsg = isHi ? safetyCheck.messageHi : safetyCheck.messageEn;
+
+      state.safetyFlags.push({
+        trigger: `RED_FLAG_${matchedAlert.category}`,
+        source: 'DETERMINISTIC_SAFETY_ENGINE',
+        timestamp: new Date().toISOString(),
+      });
+
+      if (activeEncounter) {
+        activeEncounter.status = 'EMERGENCY';
+        activeEncounter.triageCategory = 'CASUALTY';
+        activeEncounter.isEmergency = true;
+        activeEncounter.emergencyDetails = {
+          detectedAt: new Date().toISOString(),
+          matchedCategory: matchedAlert.category,
+          matchedSymptoms: matchedAlert.matchedSymptoms,
+          staffNotified: false,
+          locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+        };
+        if (!activeEncounter.alerts.some((a) => a.id === matchedAlert.id)) {
+          activeEncounter.alerts.push(matchedAlert);
+        }
+        clinicalStore.updateEncounter(encounterId, {
+          status: activeEncounter.status,
+          triageCategory: activeEncounter.triageCategory,
+          isEmergency: true,
+          emergencyDetails: activeEncounter.emergencyDetails,
+          alerts: activeEncounter.alerts,
+        });
+      }
+
+      state.conversationHistory.push({
+        role: 'ASSISTANT',
+        content: escalationMsg,
+        timestamp: new Date().toISOString(),
+      });
+
+      state.questionCount += 1;
+      state.updatedAt = new Date().toISOString();
+      state.status = 'EMERGENCY';
+
+      return {
+        interviewStatus: 'EMERGENCY',
+        status: 'EMERGENCY',
+        isEmergency: true,
+        emergencyAlert: matchedAlert,
+        question: {
+          id: `turn_${state.questionCount}`,
+          questionId: `turn_${state.questionCount}`,
+          question: escalationMsg,
+          domain: 'EMERGENCY',
+          field: 'urgent_alert',
+          text: escalationMsg,
+          answerType: 'TEXT',
+          options: [],
+        },
+        completion: {
+          detected: true,
+          reason: matchedAlert.title || 'Emergency medical alert triggered',
+        },
+        completionDetected: true,
+        aiResponse: {
+          message: escalationMsg,
+          question: escalationMsg,
+          expectsFreeText: false,
+          suggestedAnswerType: 'TEXT',
+          options: [],
+        },
+        nextQuestion: escalationMsg,
+        knownFacts: Object.values(state.knownInformation),
+        state,
+      };
+    }
+
     // Format conversation history for Medical Interrogation Engine
     const formattedHistory: MessageTurn[] = state.conversationHistory.slice(0, -1).map((m, idx) => ({
       id: `turn_${idx}`,
@@ -336,30 +420,62 @@ export const adaptiveInterviewService = {
 
     console.log('[INTERVIEW STATE AFTER]', JSON.stringify(state.knownInformation));
 
-    // Handle Emergency / Red Flag Abort
+    // Handle Emergency / Red Flag Abort from AI Interrogation Engine
     if (aiOutput.status === 'urgent_stop' || aiOutput.riskLevel === 'urgent') {
-      console.warn(`[Medical Interrogation] URGENT RED FLAG DETECTED for encounter ${encounterId}:`, aiOutput.urgentReason);
+      console.warn(`[Medical Interrogation] URGENT RED FLAG DETECTED by AI for encounter ${encounterId}:`, aiOutput.urgentReason);
+
+      const alertId = `ALERT_RED_FLAG_${Date.now()}`;
+      const textToScan = `${aiOutput.urgentReason || ''} ${state.chiefComplaint || ''} ${patientAnswer}`.toLowerCase();
+      let alertCategory: any = 'OTHER';
+      if (textToScan.includes('stroke') || textToScan.includes('neuro') || textToScan.includes('speech') || textToScan.includes('facial') || textToScan.includes('numbness') || textToScan.includes('paralysis')) {
+        alertCategory = 'NEUROLOGICAL';
+      } else if (textToScan.includes('heart') || textToScan.includes('cardiac') || textToScan.includes('chest pain') || textToScan.includes('angina')) {
+        alertCategory = 'CARDIAC';
+      } else if (textToScan.includes('breath') || textToScan.includes('respirat') || textToScan.includes('dyspnea') || textToScan.includes('asthma')) {
+        alertCategory = 'RESPIRATORY';
+      } else if (textToScan.includes('bleed') || textToScan.includes('hemorrhage') || textToScan.includes('khoon')) {
+        alertCategory = 'HEMORRHAGE';
+      } else if (textToScan.includes('faint') || textToScan.includes('syncope') || textToScan.includes('collapse') || textToScan.includes('unconscious')) {
+        alertCategory = 'SYNCOPE';
+      }
+
+      const emergencyAlert = {
+        id: alertId,
+        severity: 'EMERGENCY' as const,
+        category: alertCategory,
+        title: alertCategory !== 'OTHER' ? `Acute ${alertCategory} Red Flag Detected` : 'Emergency Red Flag Detected',
+        description: aiOutput.urgentReason || 'Critical symptoms detected. Immediate emergency medical evaluation advised.',
+        matchedSymptoms: [state.chiefComplaint || 'Emergency Clinical Warning'],
+        recommendedAction: 'Immediate triage to Emergency Department / Senior Physician evaluation.',
+        triggeredAt: new Date().toISOString(),
+      };
 
       state.safetyFlags.push({
-        ruleId: 'EMERGENCY_RED_FLAG_ABORT',
-        severity: 'CRITICAL',
-        description: aiOutput.urgentReason || 'Critical red-flag symptom detected during clinical interrogation.',
+        trigger: 'EMERGENCY_RED_FLAG_ABORT',
+        source: 'AI_CLINICAL_INTERROGATION',
         timestamp: new Date().toISOString(),
       });
 
       const encounter = clinicalStore.getEncounter(encounterId);
       if (encounter) {
-        encounter.alerts.push({
-          id: `ALERT_RED_FLAG_${Date.now()}`,
-          severity: 'EMERGENCY',
-          category: 'OTHER',
-          title: 'Emergency Red Flag Detected',
-          description: aiOutput.urgentReason || 'Critical symptoms detected. Immediate emergency medical evaluation advised.',
-          matchedSymptoms: [state.chiefComplaint || 'Emergency Red Flag'],
-          recommendedAction: 'Immediate triage to Emergency Department / Senior Physician evaluation.',
-          triggeredAt: new Date().toISOString(),
+        encounter.status = 'EMERGENCY';
+        encounter.triageCategory = 'CASUALTY';
+        encounter.isEmergency = true;
+        encounter.emergencyDetails = {
+          detectedAt: new Date().toISOString(),
+          matchedCategory: alertCategory !== 'OTHER' ? alertCategory : 'CASUALTY',
+          matchedSymptoms: emergencyAlert.matchedSymptoms,
+          staffNotified: false,
+          locationNotice: 'Casualty Department (Ground Floor, Red Line)',
+        };
+        encounter.alerts.push(emergencyAlert);
+        clinicalStore.updateEncounter(encounterId, {
+          status: encounter.status,
+          triageCategory: encounter.triageCategory,
+          isEmergency: true,
+          emergencyDetails: encounter.emergencyDetails,
+          alerts: encounter.alerts,
         });
-        clinicalStore.updateEncounter(encounterId, { alerts: encounter.alerts });
       }
 
       state.conversationHistory.push({
@@ -370,14 +486,13 @@ export const adaptiveInterviewService = {
 
       state.questionCount += 1;
       state.updatedAt = new Date().toISOString();
-      state.status = 'COMPLETED';
-
-      // Execute secondary validation pipeline
-      await this.completeInterview(encounterId);
+      state.status = 'EMERGENCY';
 
       return {
-        interviewStatus: 'COMPLETED',
-        status: 'COMPLETED',
+        interviewStatus: 'EMERGENCY',
+        status: 'EMERGENCY',
+        isEmergency: true,
+        emergencyAlert,
         question: {
           id: `turn_${state.questionCount}`,
           questionId: `turn_${state.questionCount}`,

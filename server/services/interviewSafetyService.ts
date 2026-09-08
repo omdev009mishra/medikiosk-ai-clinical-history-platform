@@ -1,58 +1,67 @@
 import { evaluateRedFlags } from '../rules/redFlags';
-import { ClinicalEncounter } from '../types/clinical';
+import { ClinicalEncounter, RedFlagAlert } from '../types/clinical';
 
 export interface SafetyFlag {
   trigger: string;
   source: string;
   timestamp: string;
+  severity?: string;
+  category?: string;
+  title?: string;
+  description?: string;
+  recommendedAction?: string;
+  matchedSymptoms?: string[];
 }
 
 /**
- * Interview Safety Service (Part 10)
- * Evaluates patient text for deterministic red flags.
- * AI MUST NOT diagnose or recommend treatments to the patient.
+ * Interview Safety Service
+ * Evaluates patient text and history for deterministic red flags.
+ * CRITICAL RULE: AI MUST NOT diagnose disease or make assertions such as "You are having a heart attack".
+ * Instead, it uses calm, warning-based escalation guidance directing to emergency staff.
  */
 export const interviewSafetyService = {
   evaluatePatientResponse(text: string, encounter?: ClinicalEncounter): SafetyFlag[] {
     const flags: SafetyFlag[] = [];
-    const lower = text.toLowerCase();
+    const history = encounter?.history || { hpi: {}, pastMedicalHistory: [], pastSurgicalHistory: [], medications: [], allergies: [], familyHistory: [], personalHistory: {}, reviewOfSystems: {} };
 
-    // Critical Emergency Keywords
-    if (lower.includes('chest pain') || lower.includes('छाती में दर्द') || lower.includes('सीने में दर्द')) {
+    const detectedAlerts = evaluateRedFlags(history as any, text);
+
+    for (const alert of detectedAlerts) {
       flags.push({
-        trigger: 'RED_FLAG_CHEST_PAIN',
-        source: 'PATIENT_INPUT',
+        trigger: `RED_FLAG_${alert.category}_${alert.id}`,
+        source: 'CLINICAL_RED_FLAG_ENGINE',
         timestamp: new Date().toISOString(),
-      });
-    }
-
-    if (lower.includes('shortness of breath') || lower.includes('difficulty breathing') || lower.includes('सांस लेने में तकलीफ')) {
-      flags.push({
-        trigger: 'RED_FLAG_DYSPNEA',
-        source: 'PATIENT_INPUT',
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    if (lower.includes('weakness on one side') || lower.includes('slurred speech') || lower.includes('लकवा')) {
-      flags.push({
-        trigger: 'RED_FLAG_NEUROLOGICAL',
-        source: 'PATIENT_INPUT',
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    if (encounter) {
-      const redFlags = evaluateRedFlags((encounter.history || encounter) as any);
-      redFlags.forEach((rf) => {
-        flags.push({
-          trigger: `RED_FLAG_${rf.category}_${rf.title.replace(/\s+/g, '_').toUpperCase()}`,
-          source: 'RED_FLAG_RULES',
-          timestamp: new Date().toISOString(),
-        });
+        severity: alert.severity,
+        category: alert.category,
+        title: alert.title,
+        description: alert.description,
+        recommendedAction: alert.recommendedAction,
+        matchedSymptoms: alert.matchedSymptoms,
       });
     }
 
     return flags;
   },
+
+  checkEmergency(text: string, encounter?: ClinicalEncounter): { isEmergency: boolean; alert?: RedFlagAlert; messageEn: string; messageHi: string } {
+    const history = encounter?.history || { hpi: {}, pastMedicalHistory: [], pastSurgicalHistory: [], medications: [], allergies: [], familyHistory: [], personalHistory: {}, reviewOfSystems: {} };
+    const alerts = evaluateRedFlags(history as any, text);
+    const emergencyAlert = alerts.find((a) => a.severity === 'EMERGENCY') || alerts[0];
+
+    if (emergencyAlert) {
+      return {
+        isEmergency: true,
+        alert: emergencyAlert,
+        messageEn: "Based on what you've told me, you may need prompt medical attention. Please stay calm, remain with a family member or nearby staff member, and proceed directly to the Casualty desk.",
+        messageHi: "आपके द्वारा बताए गए लक्षणों के आधार पर, आपको तुरंत चिकित्सकीय ध्यान (Immediate Medical Attention) की आवश्यकता हो सकती है। कृपया घबराएं नहीं। अपने किसी परिजन या अस्पताल कर्मी के साथ सीधे कैजुअल्टी (Casualty Desk) में जाएं।",
+      };
+    }
+
+    return {
+      isEmergency: false,
+      messageEn: '',
+      messageHi: '',
+    };
+  },
 };
+

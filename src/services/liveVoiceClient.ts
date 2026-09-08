@@ -53,6 +53,7 @@ export interface LiveVoiceCallbacks {
   onPartialTranscript?: (transcript: string) => void;
   onInterrupted?: () => void;
   onInterviewCompleted?: (encounterData: any) => void;
+  onEmergencyDetected?: (data: any) => void;
   onError?: (error: string) => void;
 }
 
@@ -472,6 +473,13 @@ export class LiveVoiceClient {
           this.player.stopAll();
           this.setState('completed', 'COMPLETED');
           this.callbacks.onInterviewCompleted?.(msg.encounter || msg.state);
+          break;
+
+        case 'EMERGENCY_DETECTED':
+          console.warn('[LiveVoiceClient] EMERGENCY_DETECTED event received:', msg);
+          this.player.stopAll();
+          this.setState('completed', 'COMPLETED');
+          this.callbacks.onEmergencyDetected?.(msg);
           break;
 
         case 'ERROR':

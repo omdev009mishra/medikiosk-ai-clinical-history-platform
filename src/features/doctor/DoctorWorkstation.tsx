@@ -60,6 +60,7 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
   const doctorSubView = controlledSubView ?? internalSubView;
   const setDoctorSubView = onDoctorSubViewChange ?? setInternalSubView;
   const [searchQuery, setSearchQuery] = useState('');
+  const [queueFilter, setQueueFilter] = useState<'ALL' | 'CASUALTY' | 'PRIORITY' | 'ROUTINE'>('ALL');
   const [queue, setQueue] = useState<any[]>([]);
   const [selectedEncounterId, setSelectedEncounterId] = useState<string>('ENC_001');
   const [currentEncounter, setCurrentEncounter] = useState<ClinicalEncounter | null>(null);
@@ -107,7 +108,7 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
     name: 'Dr. Alok Verma',
     regNo: 'MCI-2014-98124',
     hprId: '91-8839-2041-9981',
-    department: 'General Medicine & Emergency Triage',
+    department: 'General Medicine & Casualty Triage',
     chamber: 'Chamber 108',
     role: 'CHIEF_CONSULTANT' as const,
     avatarInitials: 'AV',
@@ -358,8 +359,34 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
     );
   }
 
-  // Filtered queue for fast searching
+  // Triage category counts
+  const casualtyCount = queue.filter(
+    (item) => item.triageCategory === 'CASUALTY' || item.triageCategory === 'EMERGENCY' || item.status === 'EMERGENCY' || item.triagePriority === 'EMERGENCY' || item.isEmergency
+  ).length;
+
+  const priorityCount = queue.filter(
+    (item) =>
+      (item.triageCategory === 'PRIORITY' || item.triagePriority === 'HIGH' || item.hasRedFlags) &&
+      item.triageCategory !== 'CASUALTY' &&
+      item.triageCategory !== 'EMERGENCY' &&
+      item.status !== 'EMERGENCY'
+  ).length;
+
+  const routineCount = queue.filter(
+    (item) =>
+      item.triageCategory === 'ROUTINE' ||
+      (!item.hasRedFlags && item.triagePriority !== 'HIGH' && item.triagePriority !== 'EMERGENCY' && item.status !== 'EMERGENCY' && item.triageCategory !== 'CASUALTY')
+  ).length;
+
+  // Filtered queue for fast searching & triage category segmentation
   const filteredQueue = queue.filter((item) => {
+    const isCas = item.triageCategory === 'CASUALTY' || item.triageCategory === 'EMERGENCY' || item.status === 'EMERGENCY' || item.triagePriority === 'EMERGENCY' || item.isEmergency;
+    const isPr = (item.triageCategory === 'PRIORITY' || item.triagePriority === 'HIGH' || item.hasRedFlags) && !isCas;
+
+    if (queueFilter === 'CASUALTY' && !isCas) return false;
+    if (queueFilter === 'PRIORITY' && !isPr) return false;
+    if (queueFilter === 'ROUTINE' && (isCas || isPr)) return false;
+
     if (!searchQuery.trim()) return true;
     const query = searchQuery.toLowerCase();
     return (
@@ -442,66 +469,138 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* LEFT PANEL: Patient Queue (4 cols) */}
         <div className="lg:col-span-4 bg-white rounded-3xl border border-slate-200/90 overflow-hidden shadow-xs">
-          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
-            <h3 className="font-extrabold text-slate-900 text-sm">
-              Patient Queue
-            </h3>
+          <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
+            <div>
+              <h3 className="font-extrabold text-slate-900 text-sm">
+                Patient Queue
+              </h3>
+              {casualtyCount > 0 && (
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Casualty patients are pinned to the top.
+                </p>
+              )}
+            </div>
             <span className="text-xs font-mono font-bold bg-white text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full shadow-2xs">
-              {filteredQueue.length} waiting
+              {filteredQueue.length} shown
             </span>
+          </div>
+
+          {/* Queue Segmentation Filter Tabs */}
+          <div className="p-2 bg-slate-50 border-b border-slate-200/80 flex items-center gap-1 overflow-x-auto text-xs">
+            <button
+              type="button"
+              onClick={() => setQueueFilter('ALL')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold text-[11px] whitespace-nowrap transition-all cursor-pointer ${
+                queueFilter === 'ALL'
+                  ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              All ({queue.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setQueueFilter('CASUALTY')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold text-[11px] whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                queueFilter === 'CASUALTY'
+                  ? 'bg-rose-50 text-rose-800 border border-rose-200 shadow-2xs'
+                  : 'text-rose-700 hover:bg-rose-50/60'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <span>Casualty ({casualtyCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setQueueFilter('PRIORITY')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold text-[11px] whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                queueFilter === 'PRIORITY'
+                  ? 'bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs'
+                  : 'text-amber-700 hover:bg-amber-50/60'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>Priority ({priorityCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setQueueFilter('ROUTINE')}
+              className={`px-3 py-1.5 rounded-xl font-extrabold text-[11px] whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                queueFilter === 'ROUTINE'
+                  ? 'bg-teal-50 text-teal-800 border border-teal-200 shadow-2xs'
+                  : 'text-teal-700 hover:bg-teal-50/60'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-teal-500" />
+              <span>Normal ({routineCount})</span>
+            </button>
           </div>
 
           <div className="divide-y divide-slate-100 max-h-[700px] overflow-y-auto">
             {filteredQueue.map((item) => {
               const isSelected = item.id === selectedEncounterId;
-              const hasAlerts = item.hasRedFlags || item.triagePriority === 'HIGH' || item.triagePriority === 'EMERGENCY';
+              const isCasualty = item.triageCategory === 'CASUALTY' || item.triageCategory === 'EMERGENCY' || item.status === 'EMERGENCY' || item.triagePriority === 'EMERGENCY' || item.isEmergency;
+              const isPriority = (item.triageCategory === 'PRIORITY' || item.triagePriority === 'HIGH' || item.hasRedFlags) && !isCasualty;
               const isVerified = item.status === 'VERIFIED';
 
               return (
                 <div
                   key={item.id}
                   onClick={() => setSelectedEncounterId(item.id)}
-                  className={`p-4 cursor-pointer transition-all hover:bg-slate-50/80 relative flex items-start justify-between gap-3 ${
-                    isSelected ? 'bg-teal-50/70 border-l-4 border-teal-700 shadow-2xs' : ''
+                  className={`p-4 cursor-pointer transition-all relative flex items-start justify-between gap-3 ${
+                    isSelected
+                      ? 'bg-slate-100/90 border-l-4 border-teal-700 shadow-2xs'
+                      : 'hover:bg-slate-50/80 bg-white'
                   }`}
                 >
                   <div className="flex items-start gap-3 min-w-0">
-                    {/* Priority Indicator Dot */}
+                    {/* Subtle Triage Indicator Dot */}
                     <div
                       className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
-                        hasAlerts
-                          ? 'bg-rose-500 ring-4 ring-rose-100 animate-pulse'
+                        isCasualty
+                          ? 'bg-rose-500'
+                          : isPriority
+                          ? 'bg-amber-500'
                           : isVerified
                           ? 'bg-emerald-500'
-                          : 'bg-amber-400'
+                          : 'bg-slate-300'
                       }`}
                     />
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <strong className="text-sm font-extrabold text-slate-900 truncate">
+                        <strong className="text-sm font-bold text-slate-900 truncate">
                           {item.patientName}
                         </strong>
-                        <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded">
+                        <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
                           {item.tokenNumber}
                         </span>
                       </div>
 
-                      <p className="text-xs text-slate-600 font-medium truncate mt-0.5">
+                      <p className="text-xs font-medium text-slate-600 truncate mt-0.5">
                         {item.chiefComplaint || 'Clinical intake in progress'}
                       </p>
 
                       <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1.5">
-                        <span>Waiting &bull; 5 min</span>
-                        <span>&bull;</span>
                         <span>{item.age}Y / {item.gender}</span>
+                        <span>&bull;</span>
+                        <span>Waiting &bull; 5 min</span>
                       </div>
                     </div>
                   </div>
 
-                  {hasAlerts && (
-                    <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 border border-rose-200 px-2 py-0.5 rounded-full uppercase shrink-0">
-                      Alert
+                  {/* Subtle category badge */}
+                  {isCasualty ? (
+                    <span className="text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full uppercase shrink-0">
+                      Casualty
+                    </span>
+                  ) : isPriority ? (
+                    <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-full uppercase shrink-0">
+                      Priority
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold bg-slate-50 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full uppercase shrink-0">
+                      Normal
                     </span>
                   )}
                 </div>
@@ -551,15 +650,15 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
                   </div>
                 </div>
 
-                {/* Red Flag Emergency Alert Box if Triggered */}
+                {/* Clinical Red Flag Assessment if Triggered */}
                 {currentEncounter.alerts && currentEncounter.alerts.length > 0 && (
-                  <div className="p-4 rounded-xl bg-rose-50 border-2 border-rose-500 text-rose-900 mb-4 animate-pulse">
+                  <div className="p-4 rounded-2xl bg-rose-50/70 border border-rose-200 text-rose-900 mb-4">
                     <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0 mt-0.5" />
+                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="bg-rose-600 text-white text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider">
-                            CRITICAL TRIAGE RED-FLAG
+                          <span className="bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
+                            CASUALTY CLINICAL RED-FLAG
                           </span>
                           <span className="font-bold text-sm text-rose-950">
                             {currentEncounter.alerts[0].title}
@@ -569,7 +668,7 @@ export const DoctorWorkstation: React.FC<DoctorWorkstationProps> = ({
                           <b>Rationale:</b> {currentEncounter.alerts[0].description}
                         </p>
                         <p className="text-xs text-rose-950 font-bold mt-1">
-                          👉 Recommended Immediate Action: {currentEncounter.alerts[0].recommendedAction}
+                          👉 Recommended Clinical Action: {currentEncounter.alerts[0].recommendedAction}
                         </p>
                       </div>
                     </div>

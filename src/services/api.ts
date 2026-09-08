@@ -207,6 +207,33 @@ export const api = {
     return res.json();
   },
 
+  // Casualty / Emergency Escalation & Staff Notification
+  async escalateCasualty(encounterId: string, category?: string, reason?: string) {
+    const res = await fetch(`${API_BASE}/encounters/${encounterId}/casualty/escalate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, reason }),
+    });
+    return res.json();
+  },
+
+  async notifyCasualtyStaff(encounterId: string, note?: string) {
+    const res = await fetch(`${API_BASE}/encounters/${encounterId}/casualty/notify-staff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    });
+    return res.json();
+  },
+
+  async escalateEmergency(encounterId: string, category?: string, reason?: string) {
+    return this.escalateCasualty(encounterId, category, reason);
+  },
+
+  async notifyEmergencyStaff(encounterId: string, note?: string) {
+    return this.notifyCasualtyStaff(encounterId, note);
+  },
+
   // ABDM & HIS
   async verifyABHA(abhaNumberOrAddress: string) {
     const res = await fetch(`${API_BASE}/abdm/verify-abha`, {

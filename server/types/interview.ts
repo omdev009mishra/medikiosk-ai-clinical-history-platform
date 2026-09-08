@@ -5,6 +5,7 @@ export type InterviewStatus =
   | 'READY_TO_COMPLETE'
   | 'COMPLETING'
   | 'COMPLETED'
+  | 'EMERGENCY'
   | 'ERROR';
 
 export interface InterviewOption {
@@ -37,6 +38,8 @@ export interface InterviewTurnResponse {
   question: StandardizedQuestion;
   completion: StandardizedCompletion;
   completionDetected?: boolean;
+  isEmergency?: boolean;
+  emergencyAlert?: any;
   aiResponse: {
     message: string;
     question: string;

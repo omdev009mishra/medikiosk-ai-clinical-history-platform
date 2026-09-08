@@ -35,10 +35,10 @@ export const DoctorLandingPage: React.FC<DoctorLandingPageProps> = ({
 }) => {
   const doctorName = doctorUser?.name || 'Dr. Alok Verma';
   const chamber = doctorUser?.chamber || 'Chamber 108';
-  const department = doctorUser?.department || 'General Medicine & Emergency Triage';
+  const department = doctorUser?.department || 'General Medicine & Casualty Triage';
 
   const waitingCount = queue.filter((e) => e.status !== 'COMPLETED').length || 2;
-  const urgentCount = queue.filter((e) => e.hasRedFlags || e.triagePriority === 'HIGH' || e.triagePriority === 'EMERGENCY').length || 1;
+  const urgentCount = queue.filter((e) => e.triageCategory === 'CASUALTY' || e.triageCategory === 'EMERGENCY' || e.hasRedFlags || e.triagePriority === 'HIGH' || e.triagePriority === 'EMERGENCY').length || 1;
   const completedTodayCount = 5;
 
   return (
@@ -116,7 +116,7 @@ export const DoctorLandingPage: React.FC<DoctorLandingPageProps> = ({
             <span className="text-3xl sm:text-4xl font-black text-rose-600 font-mono">
               {urgentCount}
             </span>
-            <span className="text-xs font-semibold text-rose-700">Priority Triage</span>
+            <span className="text-xs font-semibold text-rose-700">Casualty &amp; Priority</span>
           </div>
           <p className="text-xs text-rose-600/90 font-medium">Chest pain with radiating symptoms</p>
         </div>
@@ -208,7 +208,8 @@ export const DoctorLandingPage: React.FC<DoctorLandingPageProps> = ({
 
           <div className="space-y-3">
             {queue.slice(0, 3).map((enc) => {
-              const isUrgent = enc.hasRedFlags || enc.triagePriority === 'HIGH' || enc.triagePriority === 'EMERGENCY';
+              const isCasualty = enc.triageCategory === 'CASUALTY' || enc.triageCategory === 'EMERGENCY' || enc.status === 'EMERGENCY';
+              const isUrgent = isCasualty || enc.hasRedFlags || enc.triagePriority === 'HIGH' || enc.triagePriority === 'EMERGENCY';
               return (
                 <div
                   key={enc.id}
@@ -220,8 +221,8 @@ export const DoctorLandingPage: React.FC<DoctorLandingPageProps> = ({
                 >
                   <div className="flex items-center gap-3">
                     <div
-                      className={`w-3 h-3 rounded-full ${
-                        isUrgent ? 'bg-rose-500 ring-4 ring-rose-100 animate-pulse' : 'bg-teal-500'
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        isCasualty ? 'bg-rose-500' : isUrgent ? 'bg-amber-500' : 'bg-teal-500'
                       }`}
                     />
                     <div>
@@ -232,11 +233,15 @@ export const DoctorLandingPage: React.FC<DoctorLandingPageProps> = ({
                         <span className="text-xs text-slate-400">
                           {enc.patientAge || 54} Y &bull; {enc.patientGender || 'M'}
                         </span>
-                        {isUrgent && (
-                          <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full uppercase">
-                            Emergency
+                        {isCasualty ? (
+                          <span className="text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full uppercase">
+                            Casualty
                           </span>
-                        )}
+                        ) : isUrgent ? (
+                          <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-full uppercase">
+                            Priority
+                          </span>
+                        ) : null}
                       </div>
                       <p className="text-xs text-slate-600 font-medium mt-0.5">
                         {enc.chiefComplaint || 'Acute retrosternal chest pain'}

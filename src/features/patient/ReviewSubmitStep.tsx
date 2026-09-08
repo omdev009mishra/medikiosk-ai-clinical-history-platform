@@ -116,6 +116,17 @@ export const ReviewSubmitStep: React.FC<ReviewSubmitStepProps> = ({
             </div>
           </div>
 
+          {(encounter.status === 'EMERGENCY' || encounter.triageCategory === 'CASUALTY' || encounter.triageCategory === 'EMERGENCY' || encounter.isEmergency) && (
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-rose-950 text-xs font-bold flex items-center justify-center gap-2 text-left">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+              <span>
+                {isHindi
+                  ? 'कैजुअल्टी प्राथमिकता: आपका केस प्राथमिकता के आधार पर सीधे कैजुअल्टी विभाग में भेजा गया है।'
+                  : 'Casualty Referral: Your intake is escalated with priority routing directly to the Casualty desk.'}
+              </span>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={handleSubmitIntake}
@@ -164,12 +175,26 @@ export const ReviewSubmitStep: React.FC<ReviewSubmitStepProps> = ({
               {encounter.tokenNumber || 'A-101'}
             </span>
             <span className="text-xs font-semibold text-slate-600 block pt-2">
-              {isHindi
-                ? 'कृपया परामर्श के लिए ओपीडी लाउंज में प्रतीक्षा करें।'
-                : 'Please wait for your consultation.'}
+              {encounter.status === 'EMERGENCY' || encounter.triageCategory === 'CASUALTY' || encounter.triageCategory === 'EMERGENCY' || encounter.isEmergency ? (
+                <span className="text-rose-700 font-bold block">
+                  {isHindi
+                    ? 'कृपया भूतल पर स्थित कैजुअल्टी डेस्क पर जाएं (लाल पट्टी का अनुसरण करें)'
+                    : 'Please proceed to Ground Floor Casualty Desk (Follow Red Line)'}
+                </span>
+              ) : (
+                isHindi
+                  ? 'कृपया परामर्श के लिए ओपीडी लाउंज में प्रतीक्षा करें।'
+                  : 'Please wait for your consultation.'
+              )}
             </span>
-            <span className="text-[11px] text-teal-700 font-bold block">
-              Assigned: Chamber 108 (Dr. Alok Verma)
+            <span className={`text-[11px] font-bold block ${
+              encounter.status === 'EMERGENCY' || encounter.triageCategory === 'CASUALTY' || encounter.triageCategory === 'EMERGENCY' || encounter.isEmergency
+                ? 'text-rose-800'
+                : 'text-teal-700'
+            }`}>
+              {encounter.status === 'EMERGENCY' || encounter.triageCategory === 'CASUALTY' || encounter.triageCategory === 'EMERGENCY' || encounter.isEmergency
+                ? 'Priority Routing: Casualty Triage'
+                : 'Assigned: Chamber 108 (Dr. Alok Verma)'}
             </span>
           </div>
 

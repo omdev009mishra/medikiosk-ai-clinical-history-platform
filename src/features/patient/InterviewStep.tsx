@@ -14,6 +14,11 @@ import {
   ChevronUp,
   Keyboard,
   Activity,
+  Bell,
+  HeartPulse,
+  MapPin,
+  Sparkles,
+  ShieldAlert,
 } from 'lucide-react';
 import { ClinicalEncounter, LanguageCode, InterviewState } from '../../types/client';
 import { api } from '../../services/api';
@@ -75,6 +80,29 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
   const [liveVolume, setLiveVolume] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [selectedVoiceLang, setSelectedVoiceLang] = useState<'auto' | 'hi' | 'en' | 'hinglish'>(isHindi ? 'hi' : 'auto');
+
+  // Emergency Routing State
+  const [emergencyData, setEmergencyData] = useState<{
+    detected: boolean;
+    alert?: any;
+    message?: string;
+    staffNotified?: boolean;
+    notifyingStaff?: boolean;
+  } | null>(() => {
+    if (encounter?.isEmergency || encounter?.status === 'EMERGENCY' || encounter?.triageCategory === 'CASUALTY' || encounter?.triageCategory === 'EMERGENCY') {
+      return {
+        detected: true,
+        alert: encounter.alerts?.find((a) => a.severity === 'CRITICAL') || encounter.alerts?.[0],
+        message: encounter.emergencyDetails?.matchedCategory
+          ? (isHindi
+              ? 'आपके बताए गए लक्षणों के आधार पर, हम तुरंत कैजुअल्टी चिकित्सा सहायता लेने की सलाह देते हैं।'
+              : "Based on what you've shared, prompt medical evaluation is advised. Please proceed to the Casualty desk.")
+          : undefined,
+        staffNotified: encounter.emergencyDetails?.staffNotified || false,
+      };
+    }
+    return null;
+  });
 
   // References
   const liveVoiceClientRef = useRef<LiveVoiceClient | null>(null);
@@ -221,6 +249,33 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
             }
           } catch (e) {
             console.warn('[InterviewStep] onInterviewCompleted encounter fetch notice:', e);
+          }
+        }
+      },
+
+      onEmergencyDetected: async (data: any) => {
+        console.warn('[InterviewStep] EMERGENCY_DETECTED event from live voice:', data);
+        setEmergencyData({
+          detected: true,
+          alert: data.emergencyAlert || data.alert,
+          message: data.message,
+          staffNotified: false,
+        });
+        setVoiceState('completed');
+        setDetailedState('COMPLETED');
+        setSpeechNotice(
+          isHindi
+            ? 'कैजुअल्टी प्राथमिकता: कृपया शांत रहें और कैजुअल्टी डेस्क पर जाएं'
+            : 'Casualty referral noted — please proceed to the Casualty desk'
+        );
+        if (encounter?.id) {
+          try {
+            const encRes = await api.getEncounter(encounter.id);
+            if (encRes.success && encRes.data?.encounter) {
+              onStateUpdated(encRes.data.encounter);
+            }
+          } catch (e) {
+            console.warn('[InterviewStep] onEmergencyDetected encounter refresh notice:', e);
           }
         }
       },
@@ -377,6 +432,22 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
               { role: 'ASSISTANT', content: aiMsg, timestamp: new Date().toISOString() },
             ]);
           }
+          if (res.data.interviewStatus === 'EMERGENCY' || res.data.isEmergency || res.data.emergencyAlert) {
+            console.warn('[InterviewStep] Emergency detected in REST response:', res.data);
+            setEmergencyData({
+              detected: true,
+              alert: res.data.emergencyAlert,
+              message: aiMsg,
+              staffNotified: false,
+            });
+            setVoiceState('completed');
+            setDetailedState('COMPLETED');
+            setSpeechNotice(
+              isHindi
+                ? 'कैजुअल्टी प्राथमिकता: कृपया शांत रहें और कैजुअल्टी डेस्क पर जाएं'
+                : 'Casualty referral noted — please proceed to the Casualty desk'
+            );
+          }
         }
         isProcessingRef.current = false;
         setSubmitting(false);
@@ -403,6 +474,52 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
     console.log('[TEXT INPUT] Submit triggered');
     console.log('[TEXT INPUT] Calling unified message handler');
     processPatientMessage(raw, 'text');
+  };
+
+  // Emergency Staff Alert Action
+  const handleNotifyStaff = async () => {
+    if (!encounter?.id || emergencyData?.notifyingStaff) return;
+    setEmergencyData((prev) => (prev ? { ...prev, notifyingStaff: true } : null));
+    try {
+      const res = await api.notifyCasualtyStaff(
+        encounter.id,
+        `Patient triggered casualty assistance at Kiosk: ${emergencyData?.alert?.title || 'Casualty Referral Symptoms'}`
+      );
+      if (res.success) {
+        setEmergencyData((prev) => (prev ? { ...prev, staffNotified: true, notifyingStaff: false } : null));
+      } else {
+        setEmergencyData((prev) => (prev ? { ...prev, notifyingStaff: false } : null));
+      }
+    } catch (err) {
+      console.error('Failed to notify staff:', err);
+      setEmergencyData((prev) => (prev ? { ...prev, notifyingStaff: false } : null));
+    }
+  };
+
+  // Immediate Transfer to Casualty Route
+  const handleProceedEmergency = async () => {
+    if (!encounter?.id) {
+      onNext();
+      return;
+    }
+    try {
+      await api.escalateCasualty(encounter.id, emergencyData?.alert?.category || 'CASUALTY');
+      const encRes = await api.getEncounter(encounter.id);
+      if (encRes.success && encRes.data?.encounter) {
+        onStateUpdated(encRes.data.encounter);
+      }
+    } catch (e) {
+      console.warn('Error escalating casualty:', e);
+    }
+    onNext();
+  };
+
+  // Return to Standard Conversation
+  const handleDismissEmergency = () => {
+    setEmergencyData(null);
+    setVoiceState('listening');
+    setDetailedState('MIC_ACTIVE');
+    setSpeechNotice(isHindi ? '🎤 माइक सक्रिय है, अपनी परेशानी बताएं' : '🎤 Microphone active — speak freely');
   };
 
   // Finalize / Complete Interview
@@ -562,123 +679,283 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
         </div>
       </div>
 
-      {/* 3. Centerpiece Real-Time AI Voice Orb Stage */}
-      {!isCompleted && (
-        <div className="flex flex-col items-center justify-center my-4 relative">
-          {/* Concentric Sonic Rings driven by live audio volume */}
-          {(voiceState === 'listening' || voiceState === 'patient-speaking') && (
-            <>
-              <div
-                className="absolute rounded-full bg-teal-400/20 animate-pulse-ring pointer-events-none transition-all duration-100"
-                style={{
-                  width: `${176 + liveVolume * 70}px`,
-                  height: `${176 + liveVolume * 70}px`,
-                }}
-              />
-              <div
-                className="absolute rounded-full bg-teal-500/10 animate-pulse-ring [animation-delay:0.8s] pointer-events-none transition-all duration-100"
-                style={{
-                  width: `${224 + liveVolume * 90}px`,
-                  height: `${224 + liveVolume * 90}px`,
-                }}
-              />
-            </>
-          )}
-
-          {voiceState === 'speaking' && (
-            <div
-              className="absolute rounded-full bg-cyan-400/20 animate-pulse-ring pointer-events-none transition-all duration-100"
-              style={{
-                width: `${192 + liveVolume * 80}px`,
-                height: `${192 + liveVolume * 80}px`,
-              }}
-            />
-          )}
-
-          {/* The AI Orb */}
-          <div
-            onClick={handleMicButtonClick}
-            role="button"
-            tabIndex={0}
-            title={voiceState === 'speaking' ? 'Click to interrupt' : 'Microphone is active'}
-            className={`w-32 h-32 sm:w-36 sm:h-36 rounded-full flex flex-col items-center justify-center text-white cursor-pointer select-none transition-all duration-300 z-10 ${
-              voiceState === 'connecting'
-                ? 'bg-gradient-to-tr from-slate-700 via-teal-800 to-slate-800 shadow-md animate-pulse'
-                : voiceState === 'patient-speaking'
-                ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-teal-400 scale-105 shadow-2xl shadow-emerald-600/40 ring-4 ring-emerald-300/40'
-                : voiceState === 'speaking'
-                ? 'bg-gradient-to-tr from-teal-700 via-cyan-600 to-blue-500 animate-ai-speaking shadow-xl shadow-cyan-600/30'
-                : isMuted
-                ? 'bg-gradient-to-tr from-slate-600 via-rose-700 to-slate-700 shadow-md ring-4 ring-rose-300/40'
-                : 'bg-gradient-to-tr from-teal-700 via-teal-500 to-emerald-400 animate-ai-listening shadow-xl shadow-teal-600/30'
-            }`}
-          >
-            {/* Orb Inner Graphic */}
-            {voiceState === 'connecting' ? (
-              <Loader2 className="w-10 h-10 animate-spin text-teal-200" />
-            ) : voiceState === 'patient-speaking' ? (
-              /* Reactive Sound Equalizer Wave */
-              <div className="flex items-center gap-1.5 h-8">
-                <span className="w-1.5 bg-white rounded-full animate-sound-wave-1" />
-                <span className="w-1.5 bg-white rounded-full animate-sound-wave-2" />
-                <span className="w-1.5 bg-white rounded-full animate-sound-wave-3" />
-                <span className="w-1.5 bg-white rounded-full animate-sound-wave-4" />
-                <span className="w-1.5 bg-white rounded-full animate-sound-wave-5" />
-              </div>
-            ) : voiceState === 'speaking' ? (
-              <Volume2 className="w-10 h-10 animate-pulse text-cyan-100" />
-            ) : isMuted ? (
-              <MicOff className="w-10 h-10 text-rose-200" />
-            ) : (
-              <Mic className="w-10 h-10 text-white animate-pulse" />
-            )}
+      {/* 2.5 Casualty Guidance Card (Triggered if red flags detected) */}
+      {emergencyData?.detected ? (
+        <div className="w-full bg-white rounded-3xl border border-rose-200 p-6 sm:p-9 shadow-sm space-y-6 text-center animate-in zoom-in-95 duration-200">
+          <div className="w-16 h-16 rounded-full bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center mx-auto shadow-2xs">
+            <ShieldAlert className="w-8 h-8 stroke-[2.2]" />
           </div>
 
-          {/* Voice State Status Text */}
-          <div className="text-center mt-5 space-y-1">
-            <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
-              {voiceState === 'connecting'
-                ? (isHindi ? 'माइक्रोफ़ोन कनेक्ट हो रहा है...' : 'Connecting to Live Assistant...')
-                : voiceState === 'patient-speaking'
-                ? (isHindi ? 'आपकी बात सुन रहे हैं...' : 'Hearing you speak...')
-                : voiceState === 'speaking'
-                ? (isHindi ? 'मेडीकियोस्क बोल रहा है...' : 'MediKiosk is speaking...')
-                : isMuted
-                ? (isHindi ? 'माइक म्यूट है' : 'Microphone Muted')
-                : (isHindi ? 'सुन रहे हैं...' : "I'm listening...")}
-            </h3>
-            <p className="text-xs sm:text-sm font-medium text-slate-500">
-              {voiceState === 'speaking'
-                ? (isHindi ? 'बीच में कभी भी बोलें — तुरंत टोक सकते हैं' : 'Speak anytime — barge-in is active')
-                : voiceState === 'patient-speaking'
-                ? (isHindi ? 'बोलने के बाद स्वाभाविक रूप से रुकें' : 'Speak freely, pause naturally when done')
-                : isMuted
-                ? (isHindi ? 'अनम्यूट करने के लिए बटन दबाएं' : 'Click Unmute to resume speaking')
-                : (isHindi ? 'माइक निरंतर चालू है, आराम से बताएं' : 'Continuous mic active — speak whenever ready')}
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-50 text-rose-800 border border-rose-200">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              {isHindi ? 'कैजुअल्टी प्राथमिकता' : 'Casualty Priority'}
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              {isHindi ? 'कैजुअल्टी परामर्श की सलाह' : 'Prompt Medical Attention Advised'}
+            </h2>
+            <p className="text-sm sm:text-base text-slate-600 font-medium max-w-xl mx-auto leading-relaxed">
+              {emergencyData.message || (isHindi
+                ? 'आपके द्वारा बताए गए लक्षणों के आधार पर, हम अनुशंसा करते हैं कि एक डॉक्टर तुरंत आपकी जांच करें। कृपया शांत रहें, हमारी मेडिकल टीम आपकी सहायता करेगी।'
+                : "Based on what you've described, our clinical protocol advises that a physician examine you promptly. Please remain calm — our medical staff is being alerted.")}
             </p>
           </div>
-        </div>
-      )}
 
-      {/* 4. Live Spoken Clinical Interaction Card */}
-      {!isCompleted && (
-        <div className="w-full bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-7 shadow-sm text-center space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200/70 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-              {isHindi ? 'वर्तमान बातचीत' : 'Live Interaction'}
-            </span>
+          {/* Calm Guidance Checklist */}
+          <div className="bg-rose-50/50 border border-rose-200/80 rounded-2xl p-5 text-left space-y-3.5 max-w-xl mx-auto">
+            <div className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                1
+              </div>
+              <div>
+                <strong className="text-sm font-bold text-slate-900 block">
+                  {isHindi ? 'कृपया आराम से बैठें' : 'Please remain seated and calm'}
+                </strong>
+                <span className="text-xs text-slate-600 font-medium">
+                  {isHindi ? 'अपने साथ किसी परिजन या कियोस्क सहायक को साथ रखें।' : 'Stay seated. Ask a family member or attendant to remain with you.'}
+                </span>
+              </div>
+            </div>
 
-            {voiceState === 'speaking' && (
-              <span className="text-xs text-cyan-700 font-semibold flex items-center gap-1 animate-pulse">
-                <Volume2 className="w-3.5 h-3.5" />
-                <span>{isHindi ? 'लाइव ऑडियो' : 'Streaming 24kHz Audio'}</span>
-              </span>
-            )}
+            <div className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                2
+              </div>
+              <div>
+                <strong className="text-sm font-bold text-slate-900 block">
+                  {isHindi ? 'अस्पताल स्टाफ को सूचित करें' : 'Alert on-duty clinical team'}
+                </strong>
+                <span className="text-xs text-slate-600 font-medium">
+                  {emergencyData.staffNotified
+                    ? (isHindi ? '✓ ऑन-ड्यूटी नर्सिंग स्टाफ को सूचित कर दिया गया है। वे आपकी ओर आ रहे हैं।' : '✓ On-duty nursing team notified. An attendant is on the way.')
+                    : (isHindi ? 'नीचे दिए गए बटन को दबाकर तुरंत निकटतम नर्स/अटेंडेंट को बुलाएं।' : 'Click the button below to sound a direct alert for the on-duty triage nurse.')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                3
+              </div>
+              <div>
+                <strong className="text-sm font-bold text-slate-900 block">
+                  {isHindi ? 'कैजुअल्टी डेस्क स्थान' : 'Casualty Desk Location'}
+                </strong>
+                <span className="text-xs text-rose-900 font-bold flex items-center gap-1 mt-0.5">
+                  <MapPin className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  {isHindi ? 'भूतल (Ground Floor) - लाल पट्टी (Red Floor Line) का अनुसरण करें — कैजुअल्टी डेस्क' : 'Ground Floor — Follow Red Line to Casualty Desk'}
+                </span>
+              </div>
+            </div>
           </div>
 
-          <p className="text-lg sm:text-2xl font-extrabold text-slate-900 leading-snug tracking-tight">
-            {activeQuestion}
-          </p>
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-xl mx-auto pt-2">
+            {/* Notify Staff Button */}
+            <button
+              type="button"
+              onClick={handleNotifyStaff}
+              disabled={emergencyData.staffNotified || emergencyData.notifyingStaff}
+              className={`w-full sm:w-auto flex-1 py-4 px-6 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs ${
+                emergencyData.staffNotified
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-rose-700 hover:bg-rose-800 text-white shadow-sm'
+              }`}
+            >
+              {emergencyData.notifyingStaff ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{isHindi ? 'स्टाफ को सूचित किया जा रहा है...' : 'Alerting Hospital Staff...'}</span>
+                </>
+              ) : emergencyData.staffNotified ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                  <span>{isHindi ? '✓ अस्पताल स्टाफ को सूचित किया गया' : '✓ Hospital Staff Alerted'}</span>
+                </>
+              ) : (
+                <>
+                  <Bell className="w-4 h-4" />
+                  <span>{isHindi ? 'अस्पताल स्टाफ को सूचित करें' : 'Notify Hospital Staff'}</span>
+                </>
+              )}
+            </button>
+
+            {/* Proceed to Casualty Desk */}
+            <button
+              type="button"
+              onClick={handleProceedEmergency}
+              className="w-full sm:w-auto flex-1 py-4 px-6 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm rounded-2xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span>{isHindi ? 'कैजुअल्टी डेस्क पर जाएं' : 'Proceed to Casualty Desk'}</span>
+              <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+            </button>
+          </div>
+
+          {/* Gentle Dismiss Option */}
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={handleDismissEmergency}
+              className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline underline-offset-4 cursor-pointer"
+            >
+              {isHindi ? 'मैं ठीक महसूस कर रहा हूँ — सामान्य बातचीत जारी रखें' : 'I am feeling okay — continue standard conversation'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* 3. Centerpiece Real-Time AI Voice Orb Stage */}
+          {!isCompleted && (
+            <div className="flex flex-col items-center justify-center my-4 relative">
+              {/* Conversational Status Feedback Badges */}
+              <div className="flex flex-wrap items-center justify-center gap-2 mb-3">
+                {voiceState === 'listening' && (
+                  <span className="text-teal-800 bg-teal-50 border border-teal-200/80 px-3.5 py-1 rounded-full flex items-center gap-1.5 font-bold text-xs shadow-2xs">
+                    <Mic className="w-3.5 h-3.5 text-teal-600 animate-pulse" />
+                    <span>{isHindi ? 'सुन रहे हैं... आराम से बताएं' : "I'm listening... Speak naturally at your pace"}</span>
+                  </span>
+                )}
+                {voiceState === 'patient-speaking' && (
+                  <span className="text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-3.5 py-1 rounded-full flex items-center gap-1.5 font-bold text-xs shadow-2xs">
+                    <Activity className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+                    <span>{isHindi ? 'आपकी आवाज सुन रहे हैं...' : 'Hearing your voice... Take your time'}</span>
+                  </span>
+                )}
+                {voiceState === 'processing' && (
+                  <span className="text-blue-800 bg-blue-50 border border-blue-200/80 px-3.5 py-1 rounded-full flex items-center gap-1.5 font-bold text-xs shadow-2xs animate-pulse">
+                    <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                    <span>{isHindi ? 'आपके उत्तर को समझ रहे हैं...' : "I'm understanding your response..."}</span>
+                  </span>
+                )}
+                {voiceState === 'speaking' && (
+                  <span className="text-cyan-800 bg-cyan-50 border border-cyan-200/80 px-3.5 py-1 rounded-full flex items-center gap-1.5 font-bold text-xs shadow-2xs">
+                    <Volume2 className="w-3.5 h-3.5 text-cyan-600 animate-pulse" />
+                    <span>{isHindi ? 'मेडीकियोस्क बोल रहा है (टोक सकते हैं)' : 'MediKiosk is speaking (speak to interrupt)'}</span>
+                  </span>
+                )}
+                {conversationList.length >= 4 && (
+                  <span className="text-slate-600 bg-slate-100 border border-slate-200 px-3 py-1 rounded-full flex items-center gap-1 font-semibold text-[11px]">
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                    <span>{isHindi ? 'बस कुछ ही और सवाल बाकी हैं' : 'Almost finished — just a few more questions'}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Concentric Sonic Rings driven by live audio volume */}
+              {(voiceState === 'listening' || voiceState === 'patient-speaking') && (
+                <>
+                  <div
+                    className="absolute rounded-full bg-teal-400/20 animate-pulse-ring pointer-events-none transition-all duration-100"
+                    style={{
+                      width: `${176 + liveVolume * 70}px`,
+                      height: `${176 + liveVolume * 70}px`,
+                    }}
+                  />
+                  <div
+                    className="absolute rounded-full bg-teal-500/10 animate-pulse-ring [animation-delay:0.8s] pointer-events-none transition-all duration-100"
+                    style={{
+                      width: `${224 + liveVolume * 90}px`,
+                      height: `${224 + liveVolume * 90}px`,
+                    }}
+                  />
+                </>
+              )}
+
+              {voiceState === 'speaking' && (
+                <div
+                  className="absolute rounded-full bg-cyan-400/20 animate-pulse-ring pointer-events-none transition-all duration-100"
+                  style={{
+                    width: `${192 + liveVolume * 80}px`,
+                    height: `${192 + liveVolume * 80}px`,
+                  }}
+                />
+              )}
+
+              {/* The AI Orb */}
+              <div
+                onClick={handleMicButtonClick}
+                role="button"
+                tabIndex={0}
+                title={voiceState === 'speaking' ? 'Click to interrupt' : 'Microphone is active'}
+                className={`w-32 h-32 sm:w-36 sm:h-36 rounded-full flex flex-col items-center justify-center text-white cursor-pointer select-none transition-all duration-300 z-10 ${
+                  voiceState === 'connecting'
+                    ? 'bg-gradient-to-tr from-slate-700 via-teal-800 to-slate-800 shadow-md animate-pulse'
+                    : voiceState === 'patient-speaking'
+                    ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-teal-400 scale-105 shadow-2xl shadow-emerald-600/40 ring-4 ring-emerald-300/40'
+                    : voiceState === 'speaking'
+                    ? 'bg-gradient-to-tr from-teal-700 via-cyan-600 to-blue-500 animate-ai-speaking shadow-xl shadow-cyan-600/30'
+                    : isMuted
+                    ? 'bg-gradient-to-tr from-slate-600 via-rose-700 to-slate-700 shadow-md ring-4 ring-rose-300/40'
+                    : 'bg-gradient-to-tr from-teal-700 via-teal-500 to-emerald-400 animate-ai-listening shadow-xl shadow-teal-600/30'
+                }`}
+              >
+                {/* Orb Inner Graphic */}
+                {voiceState === 'connecting' ? (
+                  <Loader2 className="w-10 h-10 animate-spin text-teal-200" />
+                ) : voiceState === 'patient-speaking' ? (
+                  /* Reactive Sound Equalizer Wave */
+                  <div className="flex items-center gap-1.5 h-8">
+                    <span className="w-1.5 bg-white rounded-full animate-sound-wave-1" />
+                    <span className="w-1.5 bg-white rounded-full animate-sound-wave-2" />
+                    <span className="w-1.5 bg-white rounded-full animate-sound-wave-3" />
+                    <span className="w-1.5 bg-white rounded-full animate-sound-wave-4" />
+                    <span className="w-1.5 bg-white rounded-full animate-sound-wave-5" />
+                  </div>
+                ) : voiceState === 'speaking' ? (
+                  <Volume2 className="w-10 h-10 animate-pulse text-cyan-100" />
+                ) : isMuted ? (
+                  <MicOff className="w-10 h-10 text-rose-200" />
+                ) : (
+                  <Mic className="w-10 h-10 text-white animate-pulse" />
+                )}
+              </div>
+
+              {/* Voice State Status Text */}
+              <div className="text-center mt-5 space-y-1">
+                <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
+                  {voiceState === 'connecting'
+                    ? (isHindi ? 'माइक्रोफ़ोन कनेक्ट हो रहा है...' : 'Connecting to Live Assistant...')
+                    : voiceState === 'patient-speaking'
+                    ? (isHindi ? 'आपकी बात सुन रहे हैं...' : 'Hearing you speak...')
+                    : voiceState === 'speaking'
+                    ? (isHindi ? 'मेडीकियोस्क बोल रहा है...' : 'MediKiosk is speaking...')
+                    : isMuted
+                    ? (isHindi ? 'माइक म्यूट है' : 'Microphone Muted')
+                    : (isHindi ? 'सुन रहे हैं...' : "I'm listening...")}
+                </h3>
+                <p className="text-xs sm:text-sm font-medium text-slate-500">
+                  {voiceState === 'speaking'
+                    ? (isHindi ? 'बीच में कभी भी बोलें — तुरंत टोक सकते हैं' : 'Speak anytime — barge-in is active')
+                    : voiceState === 'patient-speaking'
+                    ? (isHindi ? 'बोलने के बाद स्वाभाविक रूप से रुकें' : 'Speak freely, pause naturally when done')
+                    : isMuted
+                    ? (isHindi ? 'अनम्यूट करने के लिए बटन दबाएं' : 'Click Unmute to resume speaking')
+                    : (isHindi ? 'माइक निरंतर चालू है, आराम से बताएं' : 'Continuous mic active — speak whenever ready')}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* 4. Live Spoken Clinical Interaction Card */}
+          {!isCompleted && (
+            <div className="w-full bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-8 shadow-sm text-center space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200/70 px-3 py-1 rounded-full uppercase tracking-wider">
+                  {isHindi ? 'वर्तमान बातचीत' : 'Live Interaction'}
+                </span>
+
+                {voiceState === 'speaking' && (
+                  <span className="text-xs text-cyan-700 font-semibold flex items-center gap-1 animate-pulse">
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>{isHindi ? 'लाइव ऑडियो' : 'Streaming 24kHz Audio'}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Large, Elder-friendly Question Typography */}
+              <p className="text-xl sm:text-3xl font-extrabold text-slate-900 leading-relaxed tracking-tight">
+                {activeQuestion}
+              </p>
 
           {/* Suggested Options Pills */}
           {currentOptions && currentOptions.length > 0 && (
@@ -870,6 +1147,8 @@ export const InterviewStep: React.FC<InterviewStepProps> = ({
             </div>
           )}
         </div>
+      )}
+        </>
       )}
 
       {/* 8. Completed Banner */}
