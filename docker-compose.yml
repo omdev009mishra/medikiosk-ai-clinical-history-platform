@@ -10,4 +10,85 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - DEPLOYMENT_MODE=LOCAL_HOSPITAL
+      - DATABASE_URL=postgresql://medikiosk:medikiosk_local_secret@postgres:5432/medikiosk_db
+      - SPEECH_SERVICE_URL=http://whisper:8001
+      - OCR_SERVICE_URL=http://ocr:8002
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - CLOUD_API_URL=${CLOUD_API_URL:-https://api.medikiosk.in}
+      - CLOUD_SYNC_SECRET=${CLOUD_SYNC_SECRET:-}
+      - JWT_SECRET=${JWT_SECRET:-medikiosk_local_hospital_jwt_secret}
+    volumes:
+      - medikiosk_uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      whisper:
+        condition: service_started
+      ocr:
+        condition: service_started
+    networks:
+      - medikiosk-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: medikiosk-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=medikiosk_db
+      - POSTGRES_USER=medikiosk
+      - POSTGRES_PASSWORD=medikiosk_local_secret
+    volumes:
+      - medikiosk_pgdata:/var/lib/postgresql/data
+    # Bind to localhost only so PostgreSQL is not exposed to the hospital LAN or public internet
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medikiosk -d medikiosk_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - medikiosk-net
+
+  whisper:
+    build:
+      context: ./speech-service
+      dockerfile: Dockerfile
+    container_name: medikiosk-whisper
+    restart: unless-stopped
+    environment:
+      - SPEECH_HOST=0.0.0.0
+      - SPEECH_PORT=8001
+      - WHISPER_MODEL=small
+      - WHISPER_DEVICE=auto
+    expose:
+      - "8001" # Internal container network only
+    networks:
+      - medikiosk-net
+
+  ocr:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+    container_name: medikiosk-ocr
+    restart: unless-stopped
+    environment:
+      - OCR_HOST=0.0.0.0
+      - OCR_PORT=8002
+      - OCR_LANG=en
+      - OCR_DEVICE=auto
+    expose:
+      - "8002" # Internal container network only
+    networks:
+      - medikiosk-net
+
+volumes:
+  medikiosk_pgdata:
+    driver: local
+  medikiosk_uploads:
+    driver: local
+
+networks:
+  medikiosk-net:
+    driver: bridge

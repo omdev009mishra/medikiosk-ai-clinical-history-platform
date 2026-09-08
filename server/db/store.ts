@@ -10,12 +10,16 @@ import {
   DoctorUser,
 } from '../types/clinical';
 import { evaluateRedFlags } from '../rules/redFlags';
+import { patientIdentityService } from '../services/patientIdentityService';
 
 class ClinicalStore {
   private patients: Map<string, Patient> = new Map();
   private encounters: Map<string, ClinicalEncounter> = new Map();
   private doctors: Map<string, DoctorUser> = new Map();
   private auditLogs: AuditLog[] = [];
+  private abhaIndex: Map<string, string> = new Map();
+  private hospitalIdIndex: Map<string, string> = new Map();
+  private idempotencyStore: Map<string, { result: any; createdAt: number }> = new Map();
 
   constructor() {
     this.seedInitialData();
@@ -96,6 +100,8 @@ class ClinicalStore {
       registeredAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
     };
     this.patients.set(patientA.id, patientA);
+    if (patientA.abhaId) this.abhaIndex.set(patientA.abhaId.toLowerCase(), patientA.id);
+    this.hospitalIdIndex.set(patientA.id.toLowerCase(), patientA.id);
 
     const consentA: ConsentRecord = {
       patientId: patientA.id,
@@ -342,6 +348,8 @@ class ClinicalStore {
       registeredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     };
     this.patients.set(patientB.id, patientB);
+    if (patientB.abhaId) this.abhaIndex.set(patientB.abhaId.toLowerCase(), patientB.id);
+    this.hospitalIdIndex.set(patientB.id.toLowerCase(), patientB.id);
 
     const consentB: ConsentRecord = {
       patientId: patientB.id,
@@ -554,27 +562,83 @@ class ClinicalStore {
 
   registerPatient(data: {
     fullName: string;
-    dateOfBirth: string;
-    gender: string;
+    dateOfBirth?: string;
+    gender?: string;
     phoneNumber: string;
     abhaId?: string;
+    address?: string;
   }): Patient {
+    // 1. Identity Resolution (Deterministic -> Strong Demographics -> Bayesian)
+    const match = patientIdentityService.resolveIdentity(
+      {
+        fullName: data.fullName,
+        phoneNumber: data.phoneNumber,
+        dateOfBirth: data.dateOfBirth,
+        gender: data.gender,
+        abhaId: data.abhaId,
+        address: data.address,
+      },
+      this.getAllPatients()
+    );
+
+    if (match.matchLevel === 'CONFIRMED' || match.matchLevel === 'HIGH_CONFIDENCE') {
+      const existing = match.matchedPatient!;
+      // 2. Deterministic Change Detection
+      const comparison = patientIdentityService.comparePatientData(existing, data);
+
+      if (comparison.unchanged) {
+        console.log(
+          `[PATIENT_IDENTITY_RESOLUTION] Incoming: ${data.fullName} | Candidate: ${existing.id} | Confidence: ${match.matchLevel} (${match.confidence.toFixed(2)}) | Decision: REUSE_EXISTING_PATIENT | Action: NO_OP`
+        );
+        this.logAudit(existing.id, 'PATIENT', 'PATIENT_IDENTITY_RESOLVED_NOOP', 'Patient', existing.id, {
+          confidence: match.confidence,
+          matchLevel: match.matchLevel,
+          details: match.details,
+        });
+        return existing;
+      }
+
+      console.log(
+        `[PATIENT_IDENTITY_RESOLUTION] Patient: ${existing.id} | Decision: REUSE_EXISTING_PATIENT | Changes: ${comparison.newFields.concat(comparison.changedFields).join(', ')} | Action: UPDATE_FIELD`
+      );
+      this.patients.set(existing.id, comparison.mergedData);
+      if (comparison.mergedData.abhaId) {
+        this.abhaIndex.set(comparison.mergedData.abhaId.toLowerCase(), existing.id);
+      }
+      this.logAudit(existing.id, 'PATIENT', 'PATIENT_RECORD_UPDATED', 'Patient', existing.id, {
+        newFields: comparison.newFields,
+        changedFields: comparison.changedFields,
+        confidence: match.confidence,
+      });
+      return comparison.mergedData;
+    }
+
     const count = this.patients.size + 1;
     const hospitalPatientId = `MK-2026-${count.toString().padStart(6, '0')}`;
-    const id = `PAT_${Date.now().toString().slice(-4)}`;
+    const id = `PAT_${Date.now().toString().slice(-4)}_${Math.random().toString(36).slice(2, 5)}`;
 
     const patient: Patient = {
       id,
       name: data.fullName,
       age: data.dateOfBirth ? Math.max(1, new Date().getFullYear() - new Date(data.dateOfBirth).getFullYear()) : 30,
-      gender: (data.gender.toUpperCase() === 'MALE' ? 'MALE' : data.gender.toUpperCase() === 'FEMALE' ? 'FEMALE' : 'OTHER') as any,
+      gender: ((data.gender || 'MALE').toUpperCase() === 'FEMALE' ? 'FEMALE' : (data.gender || 'MALE').toUpperCase() === 'OTHER' ? 'OTHER' : 'MALE') as any,
       phone: data.phoneNumber,
       abhaId: data.abhaId || hospitalPatientId,
+      address: data.address,
       registeredAt: new Date().toISOString(),
       verifiedIdentity: true,
     };
 
     this.patients.set(id, patient);
+    if (patient.abhaId) {
+      this.abhaIndex.set(patient.abhaId.toLowerCase(), id);
+    }
+    this.hospitalIdIndex.set(hospitalPatientId.toLowerCase(), id);
+    this.hospitalIdIndex.set(id.toLowerCase(), id);
+
+    console.log(
+      `[PATIENT_IDENTITY_RESOLUTION] Incoming: ${data.fullName} | Decision: CREATE_NEW_PATIENT | ID: ${id} | HospitalID: ${hospitalPatientId}`
+    );
     this.logAudit(id, 'PATIENT', 'PATIENT_REGISTERED', 'Patient', id, { hospitalPatientId });
     return patient;
   }
@@ -583,19 +647,75 @@ class ClinicalStore {
     const existing = this.patients.get(id);
     if (!existing) return undefined;
 
-    const updated: Patient = { ...existing, ...updates };
+    const comparison = patientIdentityService.comparePatientData(existing, updates as any);
+    if (comparison.unchanged) {
+      return existing;
+    }
+
+    const updated: Patient = { ...existing, ...comparison.mergedData };
     this.patients.set(id, updated);
+    if (updated.abhaId) {
+      this.abhaIndex.set(updated.abhaId.toLowerCase(), id);
+    }
+    this.logAudit(id, 'PATIENT', 'PATIENT_RECORD_UPDATED', 'Patient', id, {
+      changedFields: comparison.changedFields,
+      newFields: comparison.newFields,
+    });
     return updated;
   }
 
-  createPatient(patientData: Omit<Patient, 'id' | 'registeredAt'> & { id?: string }): Patient {
-    const id = patientData.id || `PAT_${Date.now().toString().slice(-4)}`;
+  createPatient(patientData: Omit<Patient, 'id' | 'registeredAt'> & { id?: string; fullName?: string; phoneNumber?: string }): Patient {
+    const match = patientIdentityService.resolveIdentity(
+      {
+        id: patientData.id,
+        fullName: patientData.name || patientData.fullName,
+        phoneNumber: patientData.phone || patientData.phoneNumber,
+        age: patientData.age,
+        gender: patientData.gender,
+        abhaId: patientData.abhaId,
+        abhaAddress: patientData.abhaAddress,
+        address: patientData.address,
+      },
+      this.getAllPatients()
+    );
+
+    if (match.matchLevel === 'CONFIRMED' || match.matchLevel === 'HIGH_CONFIDENCE') {
+      const existing = match.matchedPatient!;
+      const comparison = patientIdentityService.comparePatientData(existing, patientData);
+
+      if (comparison.unchanged) {
+        console.log(
+          `[PATIENT_IDENTITY_RESOLUTION] Incoming: ${patientData.name || patientData.fullName} | Candidate: ${existing.id} | Confidence: ${match.matchLevel} | Decision: REUSE_EXISTING_PATIENT | Action: NO_OP`
+        );
+        this.logAudit(existing.id, 'PATIENT', 'PATIENT_IDENTITY_RESOLVED_NOOP', 'Patient', existing.id, {
+          confidence: match.confidence,
+          matchLevel: match.matchLevel,
+        });
+        return existing;
+      }
+
+      console.log(
+        `[PATIENT_IDENTITY_RESOLUTION] Patient: ${existing.id} | Decision: REUSE_EXISTING_PATIENT | Changes: ${comparison.newFields.concat(comparison.changedFields).join(', ')} | Action: UPDATE_FIELD`
+      );
+      this.patients.set(existing.id, comparison.mergedData);
+      this.logAudit(existing.id, 'PATIENT', 'PATIENT_RECORD_UPDATED', 'Patient', existing.id, {
+        newFields: comparison.newFields,
+        changedFields: comparison.changedFields,
+      });
+      return comparison.mergedData;
+    }
+
+    const id = patientData.id || `PAT_${Date.now().toString().slice(-4)}_${Math.random().toString(36).slice(2, 5)}`;
     const patient: Patient = {
       ...patientData,
       id,
       registeredAt: new Date().toISOString(),
     };
     this.patients.set(id, patient);
+    if (patient.abhaId) {
+      this.abhaIndex.set(patient.abhaId.toLowerCase(), id);
+    }
+    this.hospitalIdIndex.set(id.toLowerCase(), id);
     this.logAudit(id, 'PATIENT', 'PATIENT_REGISTERED', 'Patient', id);
     return patient;
   }
@@ -615,8 +735,31 @@ class ClinicalStore {
     patientId: string;
     mode?: 'GENERAL' | 'AYUSH';
     language?: 'hi' | 'en' | 'mr' | 'gu' | 'bn' | 'ta' | 'te';
+    idempotencyKey?: string;
   }): ClinicalEncounter {
-    const encounterId = `ENC_${Date.now().toString().slice(-4)}`;
+    // 1. Check idempotency store
+    if (data.idempotencyKey && this.idempotencyStore.has(data.idempotencyKey)) {
+      const cached = this.idempotencyStore.get(data.idempotencyKey)!;
+      console.log(`[ENCOUNTER_IDEMPOTENCY] Cache hit for key: ${data.idempotencyKey}`);
+      return cached.result;
+    }
+
+    // 2. Active encounter reuse: if patient already has INTAKE_IN_PROGRESS within last 15 minutes, reuse
+    const active = Array.from(this.encounters.values()).find(
+      (e) =>
+        e.patientId === data.patientId &&
+        e.status === 'INTAKE_IN_PROGRESS' &&
+        Date.now() - new Date(e.createdAt).getTime() < 15 * 60 * 1000
+    );
+    if (active) {
+      console.log(`[ENCOUNTER_IDEMPOTENCY] Reusing active INTAKE_IN_PROGRESS encounter: ${active.id} for patient: ${data.patientId}`);
+      if (data.idempotencyKey) {
+        this.idempotencyStore.set(data.idempotencyKey, { result: active, createdAt: Date.now() });
+      }
+      return active;
+    }
+
+    const encounterId = `ENC_${Date.now().toString().slice(-4)}_${Math.random().toString(36).slice(2, 5)}`;
     const tokenNumber = `K-${Math.floor(100 + Math.random() * 900)}`;
 
     const consent: ConsentRecord = {
@@ -658,6 +801,9 @@ class ClinicalStore {
     };
 
     this.encounters.set(encounterId, encounter);
+    if (data.idempotencyKey) {
+      this.idempotencyStore.set(data.idempotencyKey, { result: encounter, createdAt: Date.now() });
+    }
     this.logAudit(data.patientId, 'PATIENT', 'ENCOUNTER_CREATED', 'ClinicalEncounter', encounterId);
     return encounter;
   }
@@ -665,9 +811,17 @@ class ClinicalStore {
   updateEncounter(id: string, updates: Partial<ClinicalEncounter>): ClinicalEncounter | undefined {
     const enc = this.encounters.get(id);
     if (!enc) return undefined;
+
+    let mergedHistory = enc.history;
+    if (updates.history) {
+      const dedupResult = patientIdentityService.deduplicateClinicalHistory(enc.history, updates.history);
+      mergedHistory = dedupResult.history;
+    }
+
     const updated: ClinicalEncounter = {
       ...enc,
       ...updates,
+      history: mergedHistory,
       updatedAt: new Date().toISOString(),
     };
     this.encounters.set(id, updated);

@@ -1,0 +1,90 @@
+name: MediKiosk CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-and-test:
+    name: Lint, Typecheck & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run Automated Test Suites
+        run: |
+          node scratch/test_patient_deduplication.js
+          node scratch/test_hybrid_sync.js
+          node scratch/test_emergency_pipeline.js
+
+      - name: Production Bundle Build
+        run: npm run build
+
+  docker-build:
+    name: Build Docker Images
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build MediKiosk App Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: medikiosk/app:latest
+
+      - name: Build Speech Service Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./speech-service
+          file: ./speech-service/Dockerfile
+          push: false
+          tags: medikiosk/whisper:latest
+
+      - name: Build OCR Service Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ocr-service
+          file: ./ocr-service/Dockerfile
+          push: false
+          tags: medikiosk/ocr:latest
+
+  deploy-staging:
+    name: Deploy to Staging (AWS Mumbai ap-south-1)
+    needs: docker-build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Staging
+        run: echo "Deploying to AWS Mumbai staging environment..."
+
+  deploy-production:
+    name: Deploy to Production (AWS Mumbai ap-south-1)
+    needs: docker-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy Production
+        run: echo "Deploying verified release to AWS Mumbai production..."

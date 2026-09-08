@@ -1,0 +1,36 @@
+# =======================================================
+# MediKiosk Cloud Infrastructure — AWS Mumbai (ap-south-1)
+# =======================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medikiosk-cloud-api
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DEPLOYMENT_MODE=CLOUD
+      - DATABASE_URL=${DATABASE_URL}
+      - AWS_REGION=ap-south-1
+      - S3_BUCKET=${S3_BUCKET:-medikiosk-clinical-records-mumbai}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - CLOUD_SYNC_SECRET=${CLOUD_SYNC_SECRET}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-south-1
+        awslogs-group: /medikiosk/production
+        awslogs-stream: api-containers

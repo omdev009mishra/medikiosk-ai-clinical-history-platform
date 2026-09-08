@@ -23,6 +23,8 @@ import { adaptiveInterviewService } from '../services/adaptiveInterviewService';
 import { getDbStatus } from '../db/prisma';
 import { StandardizedQuestion } from '../types/interview';
 import { getNextMedicalQuestion, generateMedicalSummary } from '../services/medicalInterrogation';
+import { hybridSyncService } from '../services/syncService';
+import { dbClient } from '../db/dbClient';
 
 export const apiRouter = Router();
 
@@ -33,12 +35,12 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
   const aiHealth = await checkOllamaHealth();
   const speechHealth = await checkSpeechServiceHealth();
   const ocrHealth = await checkOCRServiceHealth();
-  const dbHealth = await getDbStatus();
+  const dbHealth = await dbClient.checkHealth();
+  const syncStatus = hybridSyncService.getSyncStatus();
+
   const overallStatus =
-    dbHealth.status === 'healthy' &&
-    ((aiHealth.status as string) === 'healthy' || aiHealth.status === 'ok') &&
-    (speechHealth.status === 'healthy' || speechHealth.status === 'ok') &&
-    (ocrHealth.status === 'healthy' || ocrHealth.status === 'ok')
+    dbHealth.status !== 'degraded' &&
+    (speechHealth.status === 'healthy' || speechHealth.status === 'ok')
       ? 'healthy'
       : 'degraded';
 
@@ -47,13 +49,42 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
     overallStatus,
     version: '6.0.0-PERSISTENT-HOSPITAL-WORKFLOW',
     service: 'MediKiosk Clinical History Platform API',
+    mode: syncStatus.mode,
+    isOnline: syncStatus.isOnline,
     database: dbHealth,
-    aiProvider: 'Local Ollama',
-    ollamaStatus: aiHealth,
     speechStatus: speechHealth,
     ocrStatus: ocrHealth,
+    syncStatus,
     timestamp: new Date().toISOString(),
   });
+});
+
+apiRouter.get('/ready', async (req: Request, res: Response) => {
+  const dbHealth = await dbClient.checkHealth();
+  if (dbHealth.connected) {
+    res.status(200).json({ ready: true, status: 'ready', timestamp: new Date().toISOString() });
+  } else {
+    res.status(503).json({ ready: false, status: 'initializing', timestamp: new Date().toISOString() });
+  }
+});
+
+apiRouter.get('/sync/status', (req: Request, res: Response) => {
+  const status = hybridSyncService.getSyncStatus();
+  res.json({ success: true, data: status });
+});
+
+apiRouter.post('/sync/trigger', async (req: Request, res: Response) => {
+  const result = await hybridSyncService.processSyncQueue();
+  res.json({ success: true, data: result, syncStatus: hybridSyncService.getSyncStatus() });
+});
+
+apiRouter.post('/sync/resolve', (req: Request, res: Response) => {
+  const { syncId, resolution, mergedPayload, doctorId } = req.body;
+  if (!syncId || !resolution) {
+    return res.status(400).json({ success: false, error: { message: 'syncId and resolution are required.' } });
+  }
+  const resolved = hybridSyncService.resolveConflict(syncId, resolution, mergedPayload, doctorId);
+  res.json({ success: resolved });
 });
 
 apiRouter.get('/health/ai', async (req: Request, res: Response) => {
@@ -421,15 +452,21 @@ apiRouter.post('/patients', async (req: Request, res: Response) => {
     const data = req.body;
     const fullName = data.fullName || data.name;
     const phoneNumber = data.phoneNumber || data.phone;
-    const dateOfBirth = data.dateOfBirth || (data.age ? `${new Date().getFullYear() - Number(data.age)}-01-01` : '1995-01-01');
+    const dateOfBirth = data.dateOfBirth || (data.age ? `${new Date().getFullYear() - Number(data.age)}-01-01` : undefined);
+    const gender = data.gender || undefined;
 
-    const patient = await patientService.registerPatient({
+    const patient = clinicalStore.registerPatient({
       fullName,
       dateOfBirth,
-      gender: data.gender || 'MALE',
+      gender,
       phoneNumber,
       abhaId: data.abhaId,
+      address: data.address,
     });
+
+    // Enqueue for cloud sync in hybrid deployment
+    hybridSyncService.enqueue('UPSERT_PATIENT', 'Patient', patient.id, patient);
+
     res.json({ success: true, data: patient });
   } catch (err: any) {
     res.status(400).json({ success: false, error: { message: err.message } });
@@ -449,11 +486,15 @@ apiRouter.get('/patients/:patientId', async (req: Request, res: Response) => {
 // ==========================================
 apiRouter.post('/encounters', (req: Request, res: Response) => {
   const { patientId, mode, language } = req.body;
+  const idempotencyKey = (req.headers['idempotency-key'] as string) || req.body?.idempotencyKey;
   if (!patientId) {
     return res.status(400).json({ success: false, error: { message: 'patientId is required.' } });
   }
 
-  const encounter = clinicalStore.createEncounter({ patientId, mode, language });
+  const encounter = clinicalStore.createEncounter({ patientId, mode, language, idempotencyKey });
+  // Enqueue for cloud sync
+  hybridSyncService.enqueue('UPSERT_ENCOUNTER', 'Encounter', encounter.id, encounter);
+
   res.json({ success: true, data: encounter });
 });
 
@@ -474,6 +515,20 @@ apiRouter.get('/encounters/:id', (req: Request, res: Response) => {
 
   const patient = clinicalStore.getPatient(encounter.patientId);
   res.json({ success: true, data: { encounter, patient } });
+});
+
+apiRouter.patch('/encounters/:id', (req: Request, res: Response) => {
+  const encounter = clinicalStore.getEncounter(req.params.id);
+  if (!encounter) {
+    return res.status(404).json({ success: false, error: { message: 'Encounter not found.' } });
+  }
+
+  const updated = clinicalStore.updateEncounter(encounter.id, req.body);
+  if (updated) {
+    hybridSyncService.enqueue('UPSERT_ENCOUNTER', 'Encounter', updated.id, updated);
+  }
+
+  res.json({ success: true, data: updated });
 });
 
 // ==========================================
@@ -831,6 +886,12 @@ apiRouter.post('/encounters/:id/summary/generate', async (req: Request, res: Res
     return res.status(404).json({ success: false, error: { message: 'Encounter not found.' } });
   }
 
+  // Idempotency: If summary already exists and forceRegenerate is not requested, return existing summary
+  if (encounter.summary && !req.body?.forceRegenerate) {
+    console.log(`[SUMMARY_IDEMPOTENCY] Encounter ${encounter.id} already has summary ${encounter.summary.id}, returning existing summary (NO-OP)`);
+    return res.json({ success: true, data: encounter.summary, idempotentReuse: true });
+  }
+
   try {
     const summary = await generateEncounterSummary(encounter);
     encounter.summary = summary;
@@ -842,6 +903,9 @@ apiRouter.post('/encounters/:id/summary/generate', async (req: Request, res: Res
     });
 
     clinicalStore.logAudit(encounter.patientId, 'SYSTEM', 'AI_SUMMARY_GENERATED', 'AIClinicalSummary', summary.id);
+
+    // Enqueue summary for cloud synchronization
+    hybridSyncService.enqueue('UPSERT_SUMMARY', 'Summary', summary.id, summary);
 
     res.json({ success: true, data: summary });
   } catch (err: any) {
@@ -1334,21 +1398,7 @@ apiRouter.get('/audit/logs', (req: Request, res: Response) => {
 // 10. Phase 6 Endpoints (Patient, Encounter, Auth, Print, Dashboard)
 // ==========================================
 
-// Patient Registration & Search
-apiRouter.post('/patients', async (req: Request, res: Response) => {
-  try {
-    const patient = await patientService.registerPatient(req.body);
-    res.json({ success: true, data: patient });
-  } catch (err: any) {
-    res.status(400).json({ success: false, error: { message: err.message } });
-  }
-});
 
-apiRouter.get('/patients/search', async (req: Request, res: Response) => {
-  const query = (req.query.query as string) || '';
-  const patients = await patientService.searchPatients(query);
-  res.json({ success: true, data: patients });
-});
 
 apiRouter.get('/patients/:id', async (req: Request, res: Response) => {
   const patient = await patientService.getPatientById(req.params.id);
