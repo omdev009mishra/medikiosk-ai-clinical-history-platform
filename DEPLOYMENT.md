@@ -122,7 +122,7 @@ docker compose ps
 ### AWS Resources:
 1. **Amazon ECS / EC2:** Runs `docker-compose.production.yml` with the MediKiosk API container.
 2. **Amazon RDS PostgreSQL:** Multi-AZ PostgreSQL 16 instance in private VPC subnets.
-3. **Amazon S3:** Private bucket `medikiosk-clinical-records-mumbai` with Server-Side Encryption (SSE-S3).
+3. **Amazon S3:** Private bucket `medikiosk-clinical-records-2026` with Server-Side Encryption (SSE-S3).
 4. **AWS Application Load Balancer (ALB):** Terminating HTTPS and WSS (WebSocket).
 5. **Cloudflare:** CDN, DDoS protection, Web Application Firewall (WAF), and DNS.
 
