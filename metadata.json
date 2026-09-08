@@ -1,0 +1,6 @@
+{
+  "name": "MediKiosk — AI Clinical History Platform",
+  "description": "AI-powered multilingual clinical intake kiosk, voice and touch history taking, Dashavidha Pariksha AYUSH assessment, medical document OCR, red-flag emergency triage, and physician-verified summary system.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

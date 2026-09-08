@@ -1,0 +1,204 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  PATIENT
+  KIOSK_OPERATOR
+  DOCTOR
+  ADMIN
+}
+
+enum EncounterStatus {
+  CREATED
+  IDENTIFIED
+  INTAKE_IN_PROGRESS
+  INTAKE_COMPLETED
+  READY_FOR_REVIEW
+  UNDER_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  PATIENT_CONFIRMED
+  DOCTOR_VERIFIED
+  CONFLICTED
+  NEEDS_REVIEW
+  REJECTED
+}
+
+enum FactCriticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReviewPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DocumentType {
+  PRESCRIPTION
+  LAB_REPORT
+  DISCHARGE_SUMMARY
+  PROCEDURE_RECORD
+  OTHER
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(DOCTOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Patient {
+  id                String             @id @default(uuid())
+  hospitalPatientId String             @unique
+  fullName          String
+  dateOfBirth       String
+  gender            String
+  phoneNumber       String
+  abhaId            String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  encounters        Encounter[]
+  medicalDocuments  MedicalDocument[]
+}
+
+model Encounter {
+  id                   String                 @id @default(uuid())
+  patientId            String
+  patient              Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  status               EncounterStatus        @default(CREATED)
+  intakeMode           String                 @default("STANDARD")
+  language             String                 @default("en")
+  tokenNumber          String
+  chiefComplaint       String?
+  assignedDoctorId     String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  completedAt          DateTime?
+  facts                ClinicalFact[]
+  documents            MedicalDocument[]
+  speechTranscripts    SpeechTranscript[]
+  messages             ConversationMessage[]
+  reviewItems          ReviewItem[]
+  contradictions       ClinicalContradiction[]
+  auditEvents          ClinicalAuditEvent[]
+}
+
+model ClinicalFact {
+  id                   String             @id @default(uuid())
+  encounterId          String
+  encounter            Encounter          @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  type                 String
+  rawValue             String
+  normalizedValue      String?
+  source               String
+  sourceReference      String?
+  ocrQuality           Float?
+  completenessScore    Float?
+  verificationStatus   VerificationStatus @default(UNVERIFIED)
+  criticality          FactCriticality    @default(MEDIUM)
+  reviewPriority       ReviewPriority?
+  reviewRequired       Boolean            @default(false)
+  flaggedForReview     Boolean            @default(false)
+  doctorEditedValue    String?
+  rejectedReason       String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model MedicalDocument {
+  id               String       @id @default(uuid())
+  patientId        String
+  patient          Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encounterId      String
+  encounter        Encounter    @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  fileName         String
+  mimeType         String
+  storagePath      String
+  documentType     DocumentType @default(OTHER)
+  ocrQuality       Float?
+  needsReview      Boolean      @default(false)
+  extractedText    String?
+  createdAt        DateTime     @default(now())
+}
+
+model SpeechTranscript {
+  id            String    @id @default(uuid())
+  encounterId   String
+  encounter     Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  transcript    String
+  language      String    @default("en")
+  duration      Float?
+  audioMetadata String?
+  createdAt     DateTime  @default(now())
+}
+
+model ConversationMessage {
+  id          String    @id @default(uuid())
+  encounterId String
+  encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  role        String
+  content     String
+  createdAt   DateTime  @default(now())
+}
+
+model ReviewItem {
+  id            String         @id @default(uuid())
+  encounterId   String
+  encounter     Encounter      @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  factId        String?
+  type          String
+  priorityScore Float
+  reviewPriority ReviewPriority @default(MEDIUM)
+  title         String
+  description   String
+  criticality   FactCriticality @default(MEDIUM)
+  status        String         @default("OPEN")
+  createdAt     DateTime       @default(now())
+  resolvedAt    DateTime?
+}
+
+model ClinicalContradiction {
+  id            String    @id @default(uuid())
+  encounterId   String
+  encounter     Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  category      String
+  severity      String
+  description   String
+  factIds       String
+  sources       String
+  status        String    @default("OPEN")
+  createdAt     DateTime  @default(now())
+  resolvedAt    DateTime?
+}
+
+model ClinicalAuditEvent {
+  id            String    @id @default(uuid())
+  encounterId   String
+  encounter     Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  factId        String?
+  action        String
+  previousValue String?
+  newValue      String?
+  reason        String?
+  performedBy   String    @default("DOCTOR")
+  timestamp     DateTime  @default(now())
+}
