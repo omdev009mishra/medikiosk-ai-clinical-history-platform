@@ -31,6 +31,18 @@ export const authService = {
     return { user, token };
   },
 
+  revokedTokens: new Set<string>(),
+
+  invalidateToken(token: string): void {
+    if (token) {
+      this.revokedTokens.add(token);
+    }
+  },
+
+  isTokenRevoked(token: string): boolean {
+    return this.revokedTokens.has(token);
+  },
+
   generateToken(payload: AuthTokenPayload): string {
     const jsonStr = JSON.stringify({ ...payload, exp: Date.now() + 24 * 60 * 60 * 1000 });
     return Buffer.from(jsonStr).toString('base64url');
@@ -38,6 +50,7 @@ export const authService = {
 
   verifyToken(token: string): AuthTokenPayload | null {
     try {
+      if (this.revokedTokens.has(token)) return null;
       const decoded = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
       if (decoded.exp && decoded.exp < Date.now()) return null;
       return decoded;

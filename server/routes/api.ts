@@ -405,6 +405,27 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+  const authHeader = req.headers['authorization'];
+  let token = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.split(' ')[1]
+    : (req.headers['x-access-token'] as string);
+
+  if (!token && req.headers.cookie) {
+    const match = req.headers.cookie.match(/(?:^|;\s*)(?:auth_token|session_token|token)=([^;]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
+
+  if (token) {
+    const payload = authService.verifyToken(token);
+    if (payload) {
+      const auditRole = payload.role === 'KIOSK_OPERATOR' ? 'SYSTEM' : payload.role;
+      clinicalStore.logAudit(payload.name, auditRole, 'USER_LOGOUT', 'AuthSession', payload.userId);
+    }
+    authService.invalidateToken(token);
+  }
+
   clearAuthCookie(res, req);
   res.json({ success: true, message: 'Logged out successfully' });
 });
