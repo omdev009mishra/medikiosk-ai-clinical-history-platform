@@ -62,7 +62,7 @@ export class HybridSyncService {
 
   constructor() {
     this.deploymentMode = (process.env.DEPLOYMENT_MODE as any) === 'CLOUD' ? 'CLOUD' : 'LOCAL_HOSPITAL';
-    this.cloudApiUrl = process.env.CLOUD_API_URL || 'https://api.medikiosk.in';
+    this.cloudApiUrl = process.env.CLOUD_API_URL || 'https://medikioskai.online';
     this.init();
   }
 
@@ -129,7 +129,7 @@ export class HybridSyncService {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`${this.cloudApiUrl}/health`, {
+      const res = await fetch(`${this.cloudApiUrl}/api/health`, {
         method: 'GET',
         signal: controller.signal,
       }).catch(() => null);

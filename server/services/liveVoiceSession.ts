@@ -716,7 +716,10 @@ export class LiveVoiceSessionManager {
 
   public handleConnection(ws: WebSocket, req: any): void {
     try {
-      const url = new URL(req.url || '', 'http://localhost');
+      const host = req?.headers?.host || 'localhost';
+      const isHttps = req?.headers?.['x-forwarded-proto'] === 'https' || req?.socket?.encrypted;
+      const protocol = isHttps ? 'https' : 'http';
+      const url = new URL(req.url || '', `${protocol}://${host}`);
       const encounterId = url.searchParams.get('encounterId');
       const language = url.searchParams.get('language') || 'en';
 

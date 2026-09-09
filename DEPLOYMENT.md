@@ -100,7 +100,7 @@ NODE_ENV=production
 PORT=3000
 DATABASE_URL=postgresql://medikiosk:medikiosk_local_secret@postgres:5432/medikiosk_db
 GEMINI_API_KEY=your_gemini_api_key_here
-CLOUD_API_URL=https://api.medikiosk.in
+CLOUD_API_URL=https://medikioskai.online
 CLOUD_SYNC_SECRET=hospital_delhi_aiia_token
 EOF
 
@@ -123,8 +123,8 @@ docker compose ps
 1. **Amazon ECS / EC2:** Runs `docker-compose.production.yml` with the MediKiosk API container (lightweight ~400MB image; Whisper and OCR remain local to the hospital).
 2. **Amazon RDS PostgreSQL:** Multi-AZ PostgreSQL 16 instance in private VPC subnets with SSL enabled.
 3. **Amazon S3:** Private bucket `medikiosk-clinical-records-2026` with Server-Side Encryption (SSE-S3).
-4. **AWS Application Load Balancer (ALB):** Terminating HTTPS and WSS (WebSocket).
-5. **Cloudflare:** CDN, DDoS protection, Web Application Firewall (WAF), and DNS.
+4. **AWS Application Load Balancer (ALB) or EC2 Direct:** EC2 instance `13.203.204.160:3000`.
+5. **Cloudflare:** CDN, DDoS protection, Web Application Firewall (WAF), DNS, and SSL termination.
 
 ### AWS Cloud Launch Commands (API Only):
 ```bash
@@ -143,16 +143,45 @@ curl -f http://localhost:3000/api/ready
 
 ---
 
-## 5. Cloudflare, SSL/TLS & WebSocket (WSS)
+## 5. Cloudflare, Production Domain & WebSocket (WSS) Configuration
 
-Configure Cloudflare DNS and SSL:
-1. **DNS Records (Proxied - Orange Cloud):**
-   - `app.medikiosk.in` $\to$ CNAME to AWS ALB DNS
-   - `api.medikiosk.in` $\to$ CNAME to AWS ALB DNS
-   - `doctor.medikiosk.in` $\to$ CNAME to AWS ALB DNS
-2. **SSL/TLS Encryption Mode:** **Full (Strict)**.
-3. **WebSockets:** Enable WebSockets under Cloudflare Network settings (for `/api/live-voice` full-duplex voice streaming).
-4. **WAF Rules:** Block non-Indian IPs from Kiosk administration endpoints if desired.
+MediKiosk runs in production behind **`https://medikioskai.online`** via Cloudflare proxy to the AWS EC2 origin (`13.203.204.160:3000`).
+
+### 1. Cloudflare DNS Records (Proxied - Orange Cloud):
+| Type | Name | IPv4 / Target | Proxy Status |
+| :--- | :--- | :--- | :--- |
+| **A** | `@` (`medikioskai.online`) | `13.203.204.160` | **Proxied (Orange Cloud)** |
+| **CNAME** | `www` | `medikioskai.online` | **Proxied (Orange Cloud)** |
+
+### 2. Cloudflare Origin Rule (Route Traffic to Port 3000):
+Because the EC2 container listens on port `3000`, configure an Origin Rule in Cloudflare so external HTTPS requests on port 443 are forwarded to port 3000 on EC2:
+1. Go to **Cloudflare Dashboard** $\to$ Select domain `medikioskai.online`.
+2. Navigate to **Rules** $\to$ **Origin Rules** $\to$ Click **Create rule**.
+3. **Rule name:** `Forward to Port 3000`.
+4. **Field / When incoming requests match:**
+   - Expression: `(http.host eq "medikioskai.online" or http.host eq "www.medikioskai.online")`
+5. **Destination Port:** Select **Rewrite to...** $\to$ Port `3000`.
+6. Click **Deploy**.
+
+*(Alternative: Map port `80:3000` in EC2 Docker Compose if EC2 Security Group permits inbound HTTP port 80).*
+
+### 3. SSL/TLS Encryption:
+- In **Cloudflare Dashboard** $\to$ **SSL/TLS**:
+  - Set mode to **Flexible** (if EC2 accepts plain HTTP on port 3000 from Cloudflare edge).
+  - Or set to **Full** / **Full (Strict)** if terminating SSL with an origin certificate or ALB.
+- Enable **Always Use HTTPS** under **Edge Certificates**.
+- Enable **Automatic HTTPS Rewrites**.
+
+### 4. WebSockets for Gemini Live (WSS):
+- In **Cloudflare Dashboard** $\to$ **Network**:
+  - Verify **WebSockets** is toggled **ON** (enabled by default).
+  - The client dynamically initiates WebSocket connections via `wss://medikioskai.online/api/live-voice`.
+  - Express reverse-proxy trust (`app.set('trust proxy', 1)`) detects `X-Forwarded-Proto: https` and upgrades the socket cleanly.
+
+### 5. CORS and Cookie Security:
+- Allowed origins include `https://medikioskai.online` and `https://www.medikioskai.online`.
+- `Access-Control-Allow-Credentials: true` is enabled for cross-origin and domain API calls.
+- Authentication tokens are issued with `HttpOnly; SameSite=Lax; Secure` flags when accessed over HTTPS.
 
 ---
 

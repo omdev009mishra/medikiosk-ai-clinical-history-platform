@@ -15,9 +15,12 @@ services:
       - SPEECH_SERVICE_URL=${SPEECH_SERVICE_URL:-http://whisper:8001}
       - OCR_SERVICE_URL=${OCR_SERVICE_URL:-http://ocr:8002}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - CLOUD_API_URL=${CLOUD_API_URL:-https://api.medikiosk.in}
+      - CLOUD_API_URL=${CLOUD_API_URL:-https://medikioskai.online}
       - CLOUD_SYNC_SECRET=${CLOUD_SYNC_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:-medikiosk_local_hospital_jwt_secret}
+      - PRODUCTION_DOMAIN=${PRODUCTION_DOMAIN:-https://medikioskai.online}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://medikioskai.online,https://www.medikioskai.online,http://13.203.204.160:3000,http://13.203.204.160}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
       - AWS_REGION=${AWS_REGION:-ap-south-1}
       - S3_BUCKET=${S3_BUCKET:-medikiosk-clinical-records-2026}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}

@@ -306,6 +306,46 @@ apiRouter.post('/speech/tts', async (req: Request, res: Response) => {
 // ==========================================
 // 2. Authentication & Identification
 // ==========================================
+const isSecureRequest = (req: Request): boolean => {
+  return (
+    req.secure ||
+    req.headers['x-forwarded-proto'] === 'https' ||
+    process.env.SESSION_COOKIE_SECURE === 'true' ||
+    process.env.NODE_ENV === 'production'
+  );
+};
+
+const setAuthCookie = (res: Response, req: Request, token: string) => {
+  const isSecure = isSecureRequest(req);
+  const cookieFlags = [
+    `auth_token=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=86400',
+  ];
+  if (isSecure) {
+    cookieFlags.push('Secure');
+  }
+  res.setHeader('Set-Cookie', cookieFlags.join('; '));
+};
+
+const clearAuthCookie = (res: Response, req: Request) => {
+  const isSecure = isSecureRequest(req);
+  const cookieFlags = [
+    'auth_token=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+  ];
+  if (isSecure) {
+    cookieFlags.push('Secure');
+  }
+  res.setHeader('Set-Cookie', cookieFlags.join('; '));
+};
+
 apiRouter.post('/auth/login', async (req: Request, res: Response) => {
   const { role, pin, doctorId, email, password } = req.body;
 
@@ -313,6 +353,7 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
     const authResult = await authService.authenticateUser(email, password || pin || '1234');
     if (authResult) {
       clinicalStore.logAudit(authResult.user.name, 'DOCTOR', 'DOCTOR_LOGIN', 'AuthSession', authResult.user.id);
+      setAuthCookie(res, req, authResult.token);
       return res.json({
         success: true,
         token: authResult.token,
@@ -342,16 +383,30 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       }
 
       clinicalStore.logAudit(doctor.name, 'DOCTOR', 'DOCTOR_LOGIN', 'AuthSession', docId);
+      const token = authService.generateToken({
+        userId: doctor.id,
+        name: doctor.name,
+        email: doctor.email || 'dr.verma@hospital.aiia.gov.in',
+        role: 'DOCTOR',
+      });
+      setAuthCookie(res, req, token);
       return res.json({
         success: true,
-        token: `DOC_JWT_${Date.now()}`,
+        token,
         data: { user: { id: doctor.id, name: doctor.name, email: doctor.email || 'dr.verma@hospital.aiia.gov.in', role: 'DOCTOR' } },
         doctor,
       });
     }
   }
 
-  res.json({ success: true, token: `PAT_SESSION_${Date.now()}` });
+  const patToken = `PAT_SESSION_${Date.now()}`;
+  setAuthCookie(res, req, patToken);
+  res.json({ success: true, token: patToken });
+});
+
+apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+  clearAuthCookie(res, req);
+  res.json({ success: true, message: 'Logged out successfully' });
 });
 
 // Admin Authentication
@@ -1525,7 +1580,13 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
 
 apiRouter.get('/auth/me', (req: Request, res: Response) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : req.headers['x-access-token'] as string;
+  let token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : req.headers['x-access-token'] as string;
+  if (!token && req.headers.cookie) {
+    const match = req.headers.cookie.match(/(?:^|;\s*)(?:auth_token|session_token|token)=([^;]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
   if (!token) {
     return res.json({
       success: true,
