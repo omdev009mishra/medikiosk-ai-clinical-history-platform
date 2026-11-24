@@ -336,7 +336,7 @@ const clearAuthCookie = (res: Response, req: Request) => {
     'auth_token=',
     'Path=/',
     'HttpOnly',
-    `SameSite=${process.env.CROSS_SITE_COOKIES === 'true' ? 'None' : 'Lax'}`,,
+    `SameSite=${process.env.CROSS_SITE_COOKIES === 'true' ? 'None' : 'Lax'}`,
     'Max-Age=0',
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
   ];
