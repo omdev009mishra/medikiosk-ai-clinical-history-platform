@@ -321,7 +321,7 @@ const setAuthCookie = (res: Response, req: Request, token: string) => {
     `auth_token=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
-    `SameSite=${process.env.CROSS_SITE_COOKIES === 'true' ? 'None' : 'Lax'}`,,
+    `SameSite=${process.env.CROSS_SITE_COOKIES === 'true' ? 'None' : 'Lax'}`,
     'Max-Age=86400',
   ];
   if (isSecure) {
