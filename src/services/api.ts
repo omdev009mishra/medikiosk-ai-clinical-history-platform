@@ -9,7 +9,10 @@ import {
   AdminUser,
 } from '../types/client';
 
-const API_BASE = '/api';
+// Set VITE_API_BASE_URL to the backend origin when the frontend is hosted separately.
+// Leave it unset for the combined Express + Vite Docker deployment.
+const configuredApiOrigin = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+const API_BASE = configuredApiOrigin ? `${configuredApiOrigin}/api` : '/api';
 
 export const api = {
   // Auth
