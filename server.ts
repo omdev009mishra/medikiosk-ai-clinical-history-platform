@@ -68,14 +68,13 @@ async function startServer() {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 
     const origin = req.headers.origin;
-    if (origin) {
-      if (isOriginPermitted(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-        res.setHeader('Vary', 'Origin');
-      } else {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-      }
+    if (origin && isOriginPermitted(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+    } else if (origin) {
+      // Never reflect an untrusted Origin: doing so defeats the allow-list.
+      return res.status(403).json({ success: false, error: { message: 'Origin is not allowed.' } });
     } else {
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
