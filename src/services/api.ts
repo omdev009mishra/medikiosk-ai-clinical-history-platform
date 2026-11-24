@@ -9,12 +9,19 @@ import {
   AdminUser,
 } from '../types/client';
 
-const API_BASE = '/api';
+// Set VITE_API_BASE_URL to the backend origin when the frontend is hosted separately.
+// Leave it unset for the combined Express + Vite Docker deployment.
+const configuredApiOrigin = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+const API_BASE = configuredApiOrigin ? `${configuredApiOrigin}/api` : '/api';
+
+// Cross-origin Cloud Run API calls need cookies for the existing auth session.
+const apiFetch = (input: RequestInfo | URL, init: RequestInit = {}) =>
+  fetch(input, { ...init, credentials: 'include' });
 
 export const api = {
   // Auth
   async loginDoctor(pin: string = '1234', doctorId: string = 'DOC_DR_VERMA') {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await apiFetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role: 'DOCTOR', pin, doctorId }),
@@ -23,7 +30,7 @@ export const api = {
   },
 
   async loginAdmin(pin: string = '9999'): Promise<{ success: boolean; token?: string; admin?: AdminUser; error?: { message: string } }> {
-    const res = await fetch(`${API_BASE}/auth/admin/login`, {
+    const res = await apiFetch(`${API_BASE}/auth/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin }),
@@ -33,17 +40,17 @@ export const api = {
 
   // Healthcare Professionals & HPR Registry (Admin)
   async getDoctors(): Promise<{ success: boolean; data: DoctorUser[] }> {
-    const res = await fetch(`${API_BASE}/doctors`);
+    const res = await apiFetch(`${API_BASE}/doctors`);
     return res.json();
   },
 
   async getDoctor(id: string): Promise<{ success: boolean; data: DoctorUser }> {
-    const res = await fetch(`${API_BASE}/doctors/${id}`);
+    const res = await apiFetch(`${API_BASE}/doctors/${id}`);
     return res.json();
   },
 
   async registerDoctor(doctorData: Partial<DoctorUser>): Promise<{ success: boolean; data: DoctorUser; error?: { message: string } }> {
-    const res = await fetch(`${API_BASE}/doctors`, {
+    const res = await apiFetch(`${API_BASE}/doctors`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(doctorData),
@@ -52,7 +59,7 @@ export const api = {
   },
 
   async updateDoctor(id: string, updates: Partial<DoctorUser>): Promise<{ success: boolean; data: DoctorUser; error?: { message: string } }> {
-    const res = await fetch(`${API_BASE}/doctors/${id}`, {
+    const res = await apiFetch(`${API_BASE}/doctors/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -61,14 +68,14 @@ export const api = {
   },
 
   async deleteDoctor(id: string): Promise<{ success: boolean; message?: string; error?: { message: string } }> {
-    const res = await fetch(`${API_BASE}/doctors/${id}`, {
+    const res = await apiFetch(`${API_BASE}/doctors/${id}`, {
       method: 'DELETE',
     });
     return res.json();
   },
 
   async verifyHPR(hprId: string, regNo?: string, council?: string) {
-    const res = await fetch(`${API_BASE}/hpr/verify`, {
+    const res = await apiFetch(`${API_BASE}/hpr/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hprId, regNo, council }),
@@ -78,17 +85,17 @@ export const api = {
 
   // Patients
   async getPatients(): Promise<{ success: boolean; data: Patient[] }> {
-    const res = await fetch(`${API_BASE}/patients`);
+    const res = await apiFetch(`${API_BASE}/patients`);
     return res.json();
   },
 
   async getPatient(id: string): Promise<{ success: boolean; data: Patient }> {
-    const res = await fetch(`${API_BASE}/patients/${id}`);
+    const res = await apiFetch(`${API_BASE}/patients/${id}`);
     return res.json();
   },
 
   async createPatient(patient: Partial<Patient>): Promise<{ success: boolean; data: Patient; error?: string }> {
-    const res = await fetch(`${API_BASE}/patients`, {
+    const res = await apiFetch(`${API_BASE}/patients`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patient),
@@ -98,7 +105,7 @@ export const api = {
 
   // Encounters
   async createEncounter(patientId: string, mode: 'GENERAL' | 'AYUSH' = 'GENERAL', language: string = 'hi'): Promise<{ success: boolean; data: ClinicalEncounter }> {
-    const res = await fetch(`${API_BASE}/encounters`, {
+    const res = await apiFetch(`${API_BASE}/encounters`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ patientId, mode, language }),
@@ -107,12 +114,12 @@ export const api = {
   },
 
   async getEncounter(id: string): Promise<{ success: boolean; data: { encounter: ClinicalEncounter; patient: Patient } }> {
-    const res = await fetch(`${API_BASE}/encounters/${id}`);
+    const res = await apiFetch(`${API_BASE}/encounters/${id}`);
     return res.json();
   },
 
   async updateConsent(encounterId: string, status: 'GRANTED' | 'REVOKED' = 'GRANTED', method: string = 'AUDIO_GUIDED') {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/consent`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/consent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, method }),
@@ -122,7 +129,7 @@ export const api = {
 
   // History & Intake
   async startHistory(encounterId: string, complaintText?: string, mode?: 'GENERAL' | 'AYUSH') {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/history/start`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/history/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ complaintText, mode }),
@@ -138,7 +145,7 @@ export const api = {
     answeredIds: string[] = [],
     rawUtterance?: string
   ) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/history/answer`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/history/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ questionId, answer, source, answeredIds, rawUtterance }),
@@ -157,7 +164,7 @@ export const api = {
       rawText?: string;
     }
   ): Promise<{ success: boolean; data: { document: DocumentRecord; allTimeline: any[] } }> {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/documents`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/documents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(documentData),
@@ -167,7 +174,7 @@ export const api = {
 
   // Summary & Verification
   async generateSummary(encounterId: string): Promise<{ success: boolean; data: AIClinicalSummary }> {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/summary/generate`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/summary/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -175,7 +182,7 @@ export const api = {
   },
 
   async editSummary(encounterId: string, updatedSections: Record<string, string>, doctorNotes?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/summary/edit`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/summary/edit`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updatedSections, doctorNotes }),
@@ -184,7 +191,7 @@ export const api = {
   },
 
   async confirmSummary(encounterId: string, doctorId: string, doctorNotes?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/summary/confirm`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/summary/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ doctorId, doctorNotes }),
@@ -193,7 +200,7 @@ export const api = {
   },
 
   async rejectSummary(encounterId: string, doctorId: string, reason: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/summary/reject`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/summary/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ doctorId, reason }),
@@ -203,13 +210,13 @@ export const api = {
 
   // Doctor queue
   async getDoctorQueue(): Promise<{ success: boolean; data: any[] }> {
-    const res = await fetch(`${API_BASE}/doctor/encounters`);
+    const res = await apiFetch(`${API_BASE}/doctor/encounters`);
     return res.json();
   },
 
   // Casualty / Emergency Escalation & Staff Notification
   async escalateCasualty(encounterId: string, category?: string, reason?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/casualty/escalate`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/casualty/escalate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category, reason }),
@@ -218,7 +225,7 @@ export const api = {
   },
 
   async notifyCasualtyStaff(encounterId: string, note?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/casualty/notify-staff`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/casualty/notify-staff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ note }),
@@ -236,7 +243,7 @@ export const api = {
 
   // ABDM & HIS
   async verifyABHA(abhaNumberOrAddress: string) {
-    const res = await fetch(`${API_BASE}/abdm/verify-abha`, {
+    const res = await apiFetch(`${API_BASE}/abdm/verify-abha`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ abhaNumberOrAddress }),
@@ -245,12 +252,12 @@ export const api = {
   },
 
   async getFHIRBundle(encounterId: string) {
-    const res = await fetch(`${API_BASE}/abdm/export-fhir/${encounterId}`);
+    const res = await apiFetch(`${API_BASE}/abdm/export-fhir/${encounterId}`);
     return res.json();
   },
 
   async syncHIS(encounterId: string) {
-    const res = await fetch(`${API_BASE}/his/sync/${encounterId}`, {
+    const res = await apiFetch(`${API_BASE}/his/sync/${encounterId}`, {
       method: 'POST',
     });
     return res.json();
@@ -258,13 +265,13 @@ export const api = {
 
   // Audit
   async getAuditLogs(): Promise<{ success: boolean; data: AuditLog[] }> {
-    const res = await fetch(`${API_BASE}/audit/logs`);
+    const res = await apiFetch(`${API_BASE}/audit/logs`);
     return res.json();
   },
 
   // Speech Recognition (Faster-Whisper Proxy)
   async transcribeSpeech(base64Audio: string, mimeType: string = 'audio/webm', fileName: string = 'recording.webm', language?: string) {
-    const res = await fetch(`${API_BASE}/speech/transcribe`, {
+    const res = await apiFetch(`${API_BASE}/speech/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base64Audio, mimeType, fileName, language }),
@@ -274,12 +281,12 @@ export const api = {
 
   // Clinical Validation & Reconciliation (Phase 4)
   async getEncounterValidation(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/validation`);
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/validation`);
     return res.json();
   },
 
   async patientConfirmFact(encounterId: string, factId: string, confirmed: boolean = true) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/patient-confirm`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/patient-confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirmed }),
@@ -288,7 +295,7 @@ export const api = {
   },
 
   async resolveReviewItem(encounterId: string, reviewId: string, doctorId: string = 'DOC_DR_VERMA', resolutionNote?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/review-items/${reviewId}/resolve`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/review-items/${reviewId}/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ doctorId, resolutionNote }),
@@ -298,24 +305,24 @@ export const api = {
 
   // Phase 5 — Clinical Brief & Doctor Actions
   async getClinicalBrief(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/clinical-brief`);
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/clinical-brief`);
     return res.json();
   },
 
   async getAuditTrail(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/audit-trail`);
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/audit-trail`);
     return res.json();
   },
 
   async doctorConfirmFact(encounterId: string, factId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-confirm`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-confirm`, {
       method: 'POST',
     });
     return res.json();
   },
 
   async doctorEditFact(encounterId: string, factId: string, editedValue: any) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-edit`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ editedValue }),
@@ -324,7 +331,7 @@ export const api = {
   },
 
   async doctorRejectFact(encounterId: string, factId: string, reason?: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-reject`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/doctor-reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
@@ -333,7 +340,7 @@ export const api = {
   },
 
   async doctorFlagFact(encounterId: string, factId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/flag`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/facts/${factId}/flag`, {
       method: 'POST',
     });
     return res.json();
@@ -347,7 +354,7 @@ export const api = {
     phoneNumber: string;
     abhaId?: string;
   }) {
-    const res = await fetch(`${API_BASE}/patients`, {
+    const res = await apiFetch(`${API_BASE}/patients`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patientData),
@@ -356,22 +363,22 @@ export const api = {
   },
 
   async searchPatients(query: string) {
-    const res = await fetch(`${API_BASE}/patients/search?query=${encodeURIComponent(query)}`);
+    const res = await apiFetch(`${API_BASE}/patients/search?query=${encodeURIComponent(query)}`);
     return res.json();
   },
 
   async getPatientById(patientId: string) {
-    const res = await fetch(`${API_BASE}/patients/${patientId}`);
+    const res = await apiFetch(`${API_BASE}/patients/${patientId}`);
     return res.json();
   },
 
   async getPatientHistory(patientId: string) {
-    const res = await fetch(`${API_BASE}/patients/${patientId}/history`);
+    const res = await apiFetch(`${API_BASE}/patients/${patientId}/history`);
     return res.json();
   },
 
   async createPatientEncounter(patientId: string, options: { mode?: string; language?: string }) {
-    const res = await fetch(`${API_BASE}/patients/${patientId}/encounters`, {
+    const res = await apiFetch(`${API_BASE}/patients/${patientId}/encounters`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
@@ -380,14 +387,14 @@ export const api = {
   },
 
   async completeEncounter(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/complete`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/complete`, {
       method: 'POST',
     });
     return res.json();
   },
 
   async loginUser(email: string, password: string) {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await apiFetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -396,18 +403,18 @@ export const api = {
   },
 
   async getCurrentUser() {
-    const res = await fetch(`${API_BASE}/auth/me`);
+    const res = await apiFetch(`${API_BASE}/auth/me`);
     return res.json();
   },
 
   async getDashboardOverview() {
-    const res = await fetch(`${API_BASE}/dashboard/overview`);
+    const res = await apiFetch(`${API_BASE}/dashboard/overview`);
     return res.json();
   },
 
   // Phase 7 — Adaptive AI Clinical Interview Engine
   async startAdaptiveInterview(encounterId: string, language: string = 'en') {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/interview/start`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/interview/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ language }),
@@ -421,7 +428,7 @@ export const api = {
     language: string = 'en',
     askedQuestionIds: string[] = []
   ) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/interview/respond`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/interview/respond`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answer, language, askedQuestionIds }),
@@ -430,12 +437,12 @@ export const api = {
   },
 
   async getAdaptiveInterviewState(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/interview`);
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/interview`);
     return res.json();
   },
 
   async completeAdaptiveInterview(encounterId: string) {
-    const res = await fetch(`${API_BASE}/encounters/${encounterId}/interview/complete`, {
+    const res = await apiFetch(`${API_BASE}/encounters/${encounterId}/interview/complete`, {
       method: 'POST',
     });
     return res.json();
@@ -451,7 +458,7 @@ export const api = {
     isInitial?: boolean;
     isLanguageSwitch?: boolean;
   }) {
-    const res = await fetch(`${API_BASE}/medical/next-question`, {
+    const res = await apiFetch(`${API_BASE}/medical/next-question`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -464,7 +471,7 @@ export const api = {
     structuredHistory: any;
     language?: string;
   }) {
-    const res = await fetch(`${API_BASE}/medical/summary`, {
+    const res = await apiFetch(`${API_BASE}/medical/summary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),

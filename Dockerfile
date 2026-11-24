@@ -29,13 +29,14 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
+ENV DATA_DIR=/tmp/medikiosk-data
 
 # Install curl for container health check
 RUN apk add --no-cache curl
 
 # Create non-root user and data directory for local document storage
-RUN mkdir -p /app/data/uploads && chown -R node:node /app
+RUN mkdir -p /tmp/medikiosk-data/uploads && chown -R node:node /tmp/medikiosk-data /app
 
 # Copy built application and production dependencies from builder
 COPY --from=builder --chown=node:node /app/dist ./dist
@@ -44,9 +45,9 @@ COPY --from=builder --chown=node:node /app/package.json ./package.json
 
 USER node
 
-EXPOSE 3000
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:3000/api/ready || exit 1
+  CMD curl -f http://localhost:8080/api/ready || exit 1
 
 CMD ["node", "dist/server.cjs"]

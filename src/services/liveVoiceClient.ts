@@ -363,7 +363,11 @@ export class LiveVoiceClient {
       // 2. Establish WebSocket connection
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
-      const wsUrl = `${protocol}//${host}/api/live-voice?encounterId=${encodeURIComponent(encounterId)}&language=${encodeURIComponent(language)}`;
+      // Set VITE_WS_BASE_URL (for example, wss://your-cloud-run-url) when the
+      // frontend and backend are deployed on separate origins.
+      const configuredWsBase = (import.meta.env.VITE_WS_BASE_URL || '').trim().replace(/\/+$/, '');
+      const wsBase = configuredWsBase || `${protocol}//${host}`;
+      const wsUrl = `${wsBase}/api/live-voice?encounterId=${encodeURIComponent(encounterId)}&language=${encodeURIComponent(language)}`;
 
       console.log(`[LiveVoiceClient] Connecting to WebSocket: ${wsUrl}`);
       this.ws = new WebSocket(wsUrl);

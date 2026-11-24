@@ -1,0 +1,34 @@
+name: Cloud Run + Vercel deployment validation
+
+on:
+  push:
+    branches:
+      - deployment/cloud-run-vercel
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Build frontend and bundled Express server
+        run: npm run build
+
+      - name: Build Cloud Run container
+        run: docker build --tag medikiosk-cloud-run:validation .
